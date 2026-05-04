@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FreightBid — Shipper Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        .bid-winner-row td {
+            background: rgba(34, 197, 94, 0.07);
+        }
+
+        .bid-winner-badge {
+            font-size: 0.7rem;
+            font-family: var(--font-mono);
+            color: var(--green);
+            background: rgba(34, 197, 94, 0.15);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+        }
+
+        .shipment-card {
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .shipment-card:hover {
+            border-color: var(--accent);
+        }
+
+        .shipment-card.selected {
+            border-color: var(--accent);
+            background: var(--surface2);
+        }
+
+        .panel-detail {
+            display: none;
+        }
+
+        .panel-detail.visible {
+            display: block;
+        }
+
+        .refresh-btn {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--muted);
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+
+        .refresh-btn:hover {
+            color: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav class="nav">
+        <a class="nav-logo" href="/">Freight<span>Bid</span></a>
+        <div class="nav-right">
+            <span class="nav-user" id="nav-name">...</span>
+            <span style="color:var(--border)">|</span>
+            <span style="color:var(--accent);font-size:0.75rem;font-family:var(--font-mono)">SHIPPER</span>
+            <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- Stats Row -->
+        <div class="stats-row" id="stats-row">
+            <div class="stat-box">
+                <div class="stat-number" id="stat-open">—</div>
+                <div class="stat-label">Open Loads</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="stat-assigned">—</div>
+                <div class="stat-label">Assigned</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="stat-transit">—</div>
+                <div class="stat-label">In Transit</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="stat-delivered">—</div>
+                <div class="stat-label">Delivered</div>
+            </div>
+        </div>
+
+        <div class="grid-2" style="gap:24px;align-items:start">
+
+            <!-- LEFT: Post Load Form + My Shipments -->
+            <div>
+                <!-- Post Load Form -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Post a Load</div>
+                    </div>
+                    <div id="post-alert"></div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Pickup Location</label>
+                            <input type="text" id="pickup" placeholder="Mumbai, MH">
+                        </div>
+                        <div class="form-group">
+                            <label>Drop Location</label>
+                            <input type="text" id="drop" placeholder="Delhi, DL">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Goods Description</label>
+                        <input type="text" id="goods" placeholder="Electronics, packaged goods...">
+                    </div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Weight (kg)</label>
+                            <input type="number" id="weight" placeholder="2500">
+                        </div>
+                        <div class="form-group">
+                            <label>Vehicle Type</label>
+                            <select id="vehicle">
+                                <option>Truck</option>
+                                <option>Mini Truck</option>
+                                <option>Container</option>
+                                <option>Tempo</option>
+                                <option>Trailer</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Deadline (optional)</label>
+                            <input type="datetime-local" id="deadline">
+                        </div>
+                        <div class="form-group">
+                            <label>Approx Time (hours)</label>
+                            <input type="number" id="est_time" placeholder="e.g. 5" min="0.1" step="0.1">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-full" onclick="doPostShipment()" id="post-btn">
+                        → Post Load
+                    </button>
+                </div>
+
+                <!-- My Shipments List -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">My Shipments</div>
+                        <button class="refresh-btn" onclick="loadMyShipments()">↻ Refresh</button>
+                    </div>
+                    <div id="my-shipments-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT: Bid Detail Panel -->
+            <div>
+                <div class="card" id="detail-placeholder">
+                    <div class="empty-state">
+                        <div class="icon">📋</div>
+                        <p>Click a shipment on the left to view bids and award.</p>
+                    </div>
+                </div>
+
+                <div class="card panel-detail" id="detail-panel">
+                    <div class="card-header">
+                        <div class="card-title" id="detail-title">Shipment Detail</div>
+                        <div id="detail-status"></div>
+                    </div>
+                    <div id="detail-route" style="margin-bottom:16px"></div>
+                    <div id="detail-meta" class="meta-row" style="margin-bottom:16px"></div>
+                    <hr class="divider">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <div style="font-family:var(--font-cond);font-weight:700;font-size:0.9rem;
+                                letter-spacing:0.06em;text-transform:uppercase">
+                            Live Bids
+                        </div>
+                        <button class="refresh-btn" onclick="loadBids(currentShipmentId)">↻ Refresh</button>
+                    </div>
+                    <div id="bids-container"></div>
+                    <div id="award-section" style="margin-top:16px"></div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script>
+        // Guard: only shippers allowed
+        if (!isLoggedIn() || getRole() !== "shipper") {
+            window.location.href = "/";
+        }
+
+        document.getElementById("nav-name").textContent = getName();
+
+        let currentShipmentId = null;
+        let myShipments = [];
+
+        // ── Post Load ──────────────────────────────────────────────
+        async function doPostShipment() {
+            const btn = document.getElementById("post-btn");
+            const alertEl = document.getElementById("post-alert");
+            alertEl.innerHTML = "";
+
+            const pickup = document.getElementById("pickup").value.trim();
+            const drop = document.getElementById("drop").value.trim();
+            const goods = document.getElementById("goods").value.trim();
+            const weight = document.getElementById("weight").value;
+            const vehicle = document.getElementById("vehicle").value;
+            const deadline = document.getElementById("deadline").value;
+            const estTime = document.getElementById("est_time").value;
+
+            if (!pickup || !drop || !goods || !weight) {
+                alertEl.innerHTML = `<div class="alert alert-error">Please fill in all required fields.</div>`;
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "Posting...";
+
+            try {
+                await postShipment({
+                    pickup_address: pickup,
+                    drop_address: drop,
+                    goods_desc: goods,
+                    weight_kg: weight,
+                    vehicle_type: vehicle,
+                    deadline: deadline || null,
+                    est_time_hours: estTime ? Number(estTime) : null
+                });
+
+                alertEl.innerHTML = `<div class="alert alert-success">✓ Load posted successfully!</div>`;
+                ["pickup", "drop", "goods", "weight", "deadline", "est_time"].forEach(id =>
+                    document.getElementById(id).value = ""
+                );
+                loadMyShipments();
+
+            } catch (err) {
+                alertEl.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "→ Post Load";
+            }
+        }
+
+        // ── My Shipments List ──────────────────────────────────────
+        async function loadMyShipments() {
+            const container = document.getElementById("my-shipments-list");
+            try {
+                myShipments = await getMyShipments();
+                updateStats(myShipments);
+
+                if (!myShipments.length) {
+                    container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">📦</div>
+                        <p>No shipments posted yet. Use the form above.</p>
+                    </div>`;
+                    return;
+                }
+
+                container.innerHTML = myShipments.map(s => `
+                <div class="shipment-card card" style="margin-bottom:10px;padding:16px"
+                     id="card-${s.id}" onclick="selectShipment('${s.id}')">
+                    <div style="display:flex;justify-content:space-between;
+                                align-items:center;margin-bottom:8px">
+                        <div style="font-weight:700;font-size:0.95rem">
+                            ${s.pickup_address} → ${s.drop_address}
+                        </div>
+                        ${statusBadge(s.status)}
+                    </div>
+                    <div class="meta-row" style="gap:16px">
+                        <div class="meta-item">
+                            <span class="meta-label">Goods</span>
+                            <span class="meta-value" style="font-size:0.85rem">${s.goods_desc}</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Bids</span>
+                            <span class="meta-value accent">${s.bids ? s.bids.length : 0}</span>
+                        </div>
+                        ${s.est_time_hours ? `
+                        <div class="meta-item">
+                            <span class="meta-label">Est. Time</span>
+                            <span class="meta-value">${s.est_time_hours}h</span>
+                        </div>` : ""}
+                        ${s.status === 'delivered' && s.started_at && s.delivered_at ? `
+                        <div class="meta-item">
+                            <span class="meta-label">Time Taken</span>
+                            <span class="meta-value green">${calculateTimeTaken(s.started_at, s.delivered_at)}</span>
+                        </div>` : ""}
+                        ${s.winning_bid_amount ? `
+                        <div class="meta-item">
+                            <span class="meta-label">Awarded</span>
+                            <span class="meta-value green">${fmt(s.winning_bid_amount)}</span>
+                        </div>` : ""}
+                    </div>
+                </div>
+            `).join("");
+
+            } catch (err) {
+                container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+            }
+        }
+
+        function updateStats(shipments) {
+            const count = s => shipments.filter(x => x.status === s).length;
+            document.getElementById("stat-open").textContent = count("open");
+            document.getElementById("stat-assigned").textContent = count("assigned");
+            document.getElementById("stat-transit").textContent = count("in_transit");
+            document.getElementById("stat-delivered").textContent = count("delivered");
+        }
+
+        // ── Select Shipment → Show Bid Panel ───────────────────────
+        async function selectShipment(id) {
+            // Highlight selected card
+            document.querySelectorAll(".shipment-card").forEach(c => c.classList.remove("selected"));
+            document.getElementById(`card-${id}`)?.classList.add("selected");
+
+            currentShipmentId = id;
+            document.getElementById("detail-placeholder").style.display = "none";
+            document.getElementById("detail-panel").classList.add("visible");
+
+            const s = myShipments.find(x => x.id === id);
+            if (s) {
+                document.getElementById("detail-title").textContent = s.goods_desc;
+                document.getElementById("detail-status").innerHTML = statusBadge(s.status);
+                document.getElementById("detail-route").innerHTML = `
+                <div class="route-display">
+                    <span class="route-from">${s.pickup_address}</span>
+                    <span class="route-arrow">→</span>
+                    <span class="route-to">${s.drop_address}</span>
+                </div>`;
+                document.getElementById("detail-meta").innerHTML = `
+                <div class="meta-item">
+                    <span class="meta-label">Weight</span>
+                    <span class="meta-value">${s.weight_kg} kg</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Vehicle</span>
+                    <span class="meta-value">${s.vehicle_type}</span>
+                </div>
+                ${s.deadline ? `
+                <div class="meta-item">
+                    <span class="meta-label">Deadline</span>
+                    <span class="meta-value">${new Date(s.deadline).toLocaleDateString()}</span>
+                </div>` : ""}
+                ${s.est_time_hours ? `
+                <div class="meta-item">
+                    <span class="meta-label">Est. Time</span>
+                    <span class="meta-value">${s.est_time_hours} hours</span>
+                </div>` : ""}
+                ${s.status === 'delivered' && s.started_at && s.delivered_at ? `
+                <div class="meta-item">
+                    <span class="meta-label">Time Taken</span>
+                    <span class="meta-value green">${calculateTimeTaken(s.started_at, s.delivered_at)}</span>
+                </div>` : ""}
+                <div class="meta-item">
+                    <span class="meta-label">Posted</span>
+                    <span class="meta-value" style="font-size:0.85rem">${timeAgo(s.created_at)}</span>
+                </div>`;
+            }
+
+            await loadBids(id);
+        }
+
+        // ── Load Bids for Selected Shipment ────────────────────────
+        async function loadBids(shipmentId) {
+            const container = document.getElementById("bids-container");
+            const awardSection = document.getElementById("award-section");
+            container.innerHTML = `<div class="loading">Loading bids...</div>`;
+            awardSection.innerHTML = "";
+
+            try {
+                const bids = await getBids(shipmentId);
+                const s = myShipments.find(x => x.id === shipmentId);
+
+                if (!bids.length) {
+                    container.innerHTML = `
+                    <div class="empty-state" style="padding:30px 0">
+                        <div class="icon">🎯</div>
+                        <p>No bids yet. Drivers will place bids soon.</p>
+                    </div>`;
+                    return;
+                }
+
+                container.innerHTML = `
+                <table class="bid-table">
+                    <thead>
+                        <tr>
+                            <th>Driver</th>
+                            <th>Amount</th>
+                            <th>Time</th>
+                            ${s?.status === "open" ? "<th>Action</th>" : ""}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${bids.map((b, i) => `
+                            <tr class="${b.is_winner ? "bid-winner-row" : i === 0 ? "lowest-bid" : ""}">
+                                <td>
+                                    <div style="font-weight:600">${b.driver_name}</div>
+                                    ${b.driver_phone
+                        ? `<div style="font-size:0.78rem;color:var(--muted)">${b.driver_phone}</div>`
+                        : ""}
+                                    ${b.is_winner
+                        ? `<span class="bid-winner-badge">✓ WINNER</span>`
+                        : ""}
+                                </td>
+                                <td><span class="bid-amount">${fmt(b.amount)}</span></td>
+                                <td style="color:var(--muted);font-size:0.82rem">
+                                    ${timeAgo(b.created_at)}
+                                </td>
+                                ${s?.status === "open" ? `
+                                <td>
+                                    <button class="btn btn-outline btn-sm"
+                                            onclick="doAward('${shipmentId}','${b.bid_id}')">
+                                        Award
+                                    </button>
+                                </td>` : ""}
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>`;
+
+                // Auto-award button (lowest bid)
+                if (s?.status === "open" && bids.length) {
+                    const lowest = bids[0];
+                    awardSection.innerHTML = `
+                    <div style="display:flex;gap:10px;align-items:center">
+                        <button class="btn btn-primary"
+                                onclick="doAward('${shipmentId}')">
+                            ⚡ Auto-Award Lowest — ${fmt(lowest.amount)}
+                        </button>
+                        <span style="font-size:0.78rem;color:var(--muted)">
+                            ${lowest.driver_name}
+                        </span>
+                    </div>`;
+                }
+
+            } catch (err) {
+                container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+            }
+        }
+
+        // ── Award Shipment ─────────────────────────────────────────
+        async function doAward(shipmentId, bidId = null) {
+            if (!confirm("Award this shipment? This cannot be undone.")) return;
+            try {
+                const result = await awardShipment(shipmentId, bidId);
+                alert(`✓ Awarded to ${result.awarded_to} for ${fmt(result.winning_amount)}`);
+                await loadMyShipments();
+                await selectShipment(shipmentId);
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        // Init — load shipments on page open
+        loadMyShipments();
+    </script>
+</body>
+
+</html>
