@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FreightBid — Driver Dashboard</title>
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         .load-card {
             cursor: pointer;
@@ -155,6 +157,7 @@
                         <div class="card-title">My Trips</div>
                         <button class="refresh-btn" onclick="loadMyTrips()">↻ Refresh</button>
                     </div>
+                    <div id="trip-map" style="height: 250px; width: 100%; border-radius: 8px; margin-bottom: 12px; display:none; border: 1px solid var(--border);"></div>
                     <div id="my-trips-list">
                         <div class="loading">Loading...</div>
                     </div>
@@ -192,7 +195,7 @@
                 <div class="load-card card" style="margin-bottom:10px;padding:16px"
                      id="lcard-${s.id}" onclick="selectLoad('${s.id}')">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <div style="font-weight:700;font-size:0.95rem">${s.pickup_address} → ${s.drop_address}</div>
+                        <div style="font-weight:700;font-size:0.95rem">${s.pickup_address} → ${s.destinations && s.destinations.length > 0 ? (s.destinations.length > 1 ? s.destinations.length + ' Stops' : s.destinations[0].address) : (s.drop_address || 'N/A')}</div>
                         ${myBidsMap[s.id] ? `<span class="already-bid-badge">Bid: ${fmt(myBidsMap[s.id])}</span>` : ""}
                     </div>
                     <div class="meta-row" style="gap:16px">
@@ -244,11 +247,16 @@
 
             document.getElementById("bid-panel-title").textContent = selectedLoad.goods_desc;
             document.getElementById("bid-panel-status").innerHTML = statusBadge(selectedLoad.status);
+            const destDisplay = selectedLoad.destinations && selectedLoad.destinations.length > 0
+                ? selectedLoad.destinations.map(d => `<div style="font-size:0.85rem; margin-left:8px;">📍 ${d.address}</div>`).join('')
+                : `<span class="route-to">${selectedLoad.drop_address || 'N/A'}</span>`;
             document.getElementById("bid-panel-route").innerHTML =
-                `<div class="route-display">
-                <span class="route-from">${selectedLoad.pickup_address}</span>
-                <span class="route-arrow">→</span>
-                <span class="route-to">${selectedLoad.drop_address}</span>
+                `<div class="route-display" style="flex-direction:column;align-items:flex-start;gap:6px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="route-from">${selectedLoad.pickup_address}</span>
+                    <span class="route-arrow">→</span>
+                </div>
+                ${destDisplay}
             </div>`;
             document.getElementById("bid-panel-meta").innerHTML =
                 `<div class="meta-item"><span class="meta-label">Weight</span><span class="meta-value">${selectedLoad.weight_kg} kg</span></div>
@@ -316,13 +324,26 @@
 
                 if (!trips.length) {
                     container.innerHTML = `<div class="empty-state"><div class="icon">🏁</div><p>No assigned trips yet. Win a bid to get started.</p></div>`;
+                    document.getElementById("trip-map").style.display = "none";
+                    stopTracking();
                     return;
+                }
+
+                const activeTrip = trips.find(t => t.status === 'in_transit');
+                if (activeTrip) {
+                    plotTripOnMap(activeTrip);
+                    startTracking(activeTrip.id);
+                } else {
+                    const assignedTrip = trips.find(t => t.status === 'assigned');
+                    if (assignedTrip) plotTripOnMap(assignedTrip);
+                    else document.getElementById("trip-map").style.display = "none";
+                    stopTracking();
                 }
 
                 container.innerHTML = trips.map(t => `
                 <div class="card my-trip-card fade-in" style="margin-bottom:12px;padding:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <div style="font-weight:700">${t.pickup_address} → ${t.drop_address}</div>
+                        <div style="font-weight:700">${t.pickup_address} → ${t.destinations && t.destinations.length > 0 ? (t.destinations.length > 1 ? t.destinations.length + ' Stops' : t.destinations[0].address) : (t.drop_address || 'N/A')}</div>
                         ${statusBadge(t.status)}
                     </div>
                     <div class="meta-row" style="gap:16px;margin-bottom:0">
@@ -364,11 +385,90 @@
             </div>`;
             }
             if (trip.status === "in_transit") {
-                return `<div class="trip-status-btns">
-                <button class="btn btn-primary btn-sm" onclick="doUpdateStatus('${trip.id}','delivered')">
-                    ✅ Mark Delivered
-                </button>
-            </div>`;
+                let html = `<div style="margin-top: 12px; font-weight: 600; font-size: 0.85rem;">Route Stops:</div>`;
+                html += `<ul style="margin: 8px 0; padding-left: 20px; font-size: 0.85rem;">`;
+
+                if (trip.destinations && trip.destinations.length > 0) {
+                    const sorted = [...trip.destinations].sort((a, b) => a.order_index - b.order_index);
+
+                    // The "active" stop is the first one not yet delivered
+                    const nextIdx = sorted.findIndex(d => d.status !== "delivered");
+
+                    sorted.forEach((d, i) => {
+                        const isDelivered = d.status === "delivered";
+                        const isActive    = i === nextIdx;
+                        const isFuture    = !isDelivered && !isActive;
+
+                        let icon, label;
+
+                        if (isDelivered) {
+                            icon  = "✅";
+                            label = `<span style="font-size:0.7rem;color:var(--muted);margin-left:6px;">Delivered</span>`;
+
+                        } else if (isActive) {
+                            // Three sub-states based on ack_status
+                            if (d.ack_status === "none" || !d.ack_status) {
+                                // Driver hasn't sent arrival yet
+                                icon  = "📍";
+                                label = `<button class="btn btn-primary btn-sm"
+                                            style="margin-left:8px; padding: 2px 8px; font-size: 0.7rem;"
+                                            onclick="doSendArrival('${trip.id}', '${d.id}')">
+                                            I've Arrived
+                                         </button>`;
+
+                            } else if (d.ack_status === "pending_approval") {
+                                // Waiting for shipper
+                                icon  = "⏳";
+                                label = `<span style="margin-left:8px; font-size:0.7rem;
+                                              color:#f59e0b; font-family:var(--font-mono);">
+                                              Waiting for shipper approval...
+                                         </span>`;
+
+                            } else if (d.ack_status === "approved") {
+                                // Shipper approved — can now mark delivered
+                                icon  = "✔️";
+                                label = `<button class="btn btn-outline btn-sm"
+                                            style="margin-left:8px; padding: 2px 8px; font-size: 0.7rem;
+                                                   border-color:var(--green); color:var(--green);"
+                                            onclick="doMarkDestDelivered('${trip.id}', '${d.id}')">
+                                            Mark Delivered
+                                         </button>`;
+                            }
+
+                        } else {
+                            // Future stop — locked
+                            icon  = "🔒";
+                            label = `<span style="margin-left:8px; font-size:0.7rem; color:var(--muted);">
+                                         Complete stop ${i} first
+                                     </span>`;
+                        }
+
+                        html += `<li style="margin-bottom: 8px; ${isFuture ? 'opacity:0.45;' : ''}">
+                            ${icon} <strong>Stop ${i + 1}:</strong> ${d.address} ${label}
+                        </li>`;
+                    });
+                } else {
+                    html += `<li>No multi-stop data — <button class="btn btn-outline btn-sm" onclick="doUpdateStatus('${trip.id}','delivered')">Mark Delivered</button></li>`;
+                }
+
+                html += `</ul>`;
+
+                // Abandon — only after at least one stop is delivered
+                const sorted = trip.destinations ? [...trip.destinations].sort((a, b) => a.order_index - b.order_index) : [];
+                const anyDelivered = sorted.some(d => d.status === "delivered");
+                const anyPending   = sorted.some(d => d.status !== "delivered");
+
+                if (anyDelivered && anyPending) {
+                    html += `<div class="trip-status-btns">
+                        <button class="btn btn-outline btn-sm"
+                                onclick="doEndTripEarly('${trip.id}')"
+                                style="color: red; border-color: red;">
+                            ⚠️ End Trip Early (Abandon)
+                        </button>
+                    </div>`;
+                }
+
+                return html;
             }
             if (trip.status === "delivered") {
                 return "";
@@ -376,11 +476,112 @@
             return "";
         }
 
+        async function doSendArrival(shipmentId, destId) {
+            try {
+                await sendArrivalAck(shipmentId, destId);
+                await loadMyTrips();
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        async function doMarkDestDelivered(shipmentId, destId) {
+            if (!confirm(`Confirm: mark this stop as delivered?`)) return;
+            try {
+                await updateDestinationStatus(shipmentId, destId, "delivered");
+                await loadMyTrips();
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        async function doEndTripEarly(shipmentId) {
+            if (!confirm(`Are you sure you want to end this trip early? You will only be paid for the distance covered, and the remaining stops will be sent back to bidding.`)) return;
+            try {
+                await abandonShipment(shipmentId);
+                await loadMyTrips();
+                await loadOpenLoads(); // Refresh available loads
+                alert("Trip ended. You have been paid proportionally.");
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        // ── Tracking Logic ─────────────────────────────────────────
+        let trackingInterval = null;
+        let driverMap = null;
+        let mapMarkers = [];
+
+        function initDriverMap() {
+            if (driverMap) return;
+            const mapEl = document.getElementById("trip-map");
+            mapEl.style.display = "block";
+            driverMap = L.map('trip-map').setView([20.5937, 78.9629], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(driverMap);
+        }
+
+        function plotTripOnMap(trip) {
+            initDriverMap();
+            mapMarkers.forEach(m => driverMap.removeLayer(m));
+            mapMarkers = [];
+
+            const points = [];
+            if (trip.pickup_lat && trip.pickup_lng) {
+                const p = [trip.pickup_lat, trip.pickup_lng];
+                points.push(p);
+                const m = L.marker(p).addTo(driverMap).bindPopup("Pickup: " + trip.pickup_address);
+                mapMarkers.push(m);
+            }
+
+            if (trip.destinations) {
+                trip.destinations.forEach(d => {
+                    const p = [d.lat, d.lng];
+                    points.push(p);
+                    const m = L.marker(p, {
+                        icon: L.icon({
+                            iconUrl: d.status === 'delivered' ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png' : 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41],
+                            iconAnchor: [12, 41],
+                            popupAnchor: [1, -34],
+                            shadowSize: [41, 41]
+                        })
+                    }).addTo(driverMap).bindPopup("Drop: " + d.address);
+                    mapMarkers.push(m);
+                });
+            }
+
+            if (points.length > 0) {
+                driverMap.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
+            }
+        }
+
+        function startTracking(shipmentId) {
+            if (trackingInterval) clearInterval(trackingInterval);
+            trackingInterval = setInterval(() => {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(pos => {
+                        sendDriverLocation(shipmentId, pos.coords.latitude, pos.coords.longitude)
+                            .catch(e => console.error("Tracking error", e));
+                    }, err => console.warn("Geolocation error", err));
+                }
+            }, 15000);
+        }
+
+        function stopTracking() {
+            if (trackingInterval) clearInterval(trackingInterval);
+            trackingInterval = null;
+        }
+
         async function doUpdateStatus(shipmentId, status) {
             const label = status === "in_transit" ? "start this trip" : "mark as delivered";
             if (!confirm(`Confirm: ${label}?`)) return;
             try {
                 await updateShipmentStatus(shipmentId, status);
+                if (status === 'in_transit') startTracking(shipmentId);
+                else stopTracking();
                 await loadMyTrips();
             } catch (err) {
                 alert("Error: " + err.message);
@@ -390,7 +591,9 @@
         // Init
         loadOpenLoads();
         loadMyTrips();
+
+        // Auto-refresh trips every 8s so driver sees shipper approval without manual refresh
+        setInterval(() => loadMyTrips(), 8000);
     </script>
 </body>
-
 </html>

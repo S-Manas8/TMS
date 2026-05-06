@@ -40,7 +40,12 @@ async function apiFetch(path, options = {}) {
         body: options.body ? JSON.stringify(options.body) : undefined
     });
 
-    const data = await res.json();
+    let data;
+    try {
+        data = await res.json();
+    } catch (e) {
+        throw new Error(`Server error (${res.status})`);
+    }
 
     if (!res.ok) {
         throw new Error(data.detail || "Something went wrong");
@@ -94,37 +99,67 @@ async function updateShipmentStatus(id, status) {
     });
 }
 
-// ---------- Bids ----------
-
-async function placeBid(shipmentId, amount) {
-    return apiFetch(`/api/${shipmentId}/bid`, {
-        method: "POST",
-        body: { amount }
+async function updateDestinationStatus(shipmentId, destId, status) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}`, {
+        method: "PATCH",
+        body: { status }
     });
 }
 
-async function getBids(shipmentId) {
-    return apiFetch(`/api/${shipmentId}/bids`);
-}
-
-async function awardShipment(shipmentId, bidId = null) {
-    return apiFetch(`/api/${shipmentId}/award`, {
-        method: "POST",
-        body: bidId ? { bid_id: bidId } : {}
+async function abandonShipment(shipmentId) {
+    return apiFetch(`/api/shipments/${shipmentId}/abandon`, {
+        method: "POST"
     });
 }
 
-// ---------- Tracking ----------
+async function sendArrivalAck(shipmentId, destId) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}/arrive`, {
+        method: "POST"
+    });
+}
 
-async function sendLocation(shipmentId, lat, lng) {
+async function approveArrival(shipmentId, destId) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}/approve`, {
+        method: "POST"
+    });
+}
+
+async function sendDriverLocation(shipmentId, lat, lng) {
     return apiFetch(`/api/track/${shipmentId}/location`, {
         method: "POST",
         body: { lat, lng }
     });
 }
 
-async function getLocation(shipmentId) {
+async function getLatestLocation(shipmentId) {
     return apiFetch(`/api/track/${shipmentId}/location`);
+}
+
+async function rateDriver(shipmentId, score) {
+    return apiFetch(`/api/shipments/${shipmentId}/rate`, {
+        method: "POST",
+        body: { score }
+    });
+}
+
+// ---------- Bids ----------
+
+async function placeBid(shipmentId, amount) {
+    return apiFetch(`/api/shipments/${shipmentId}/bid`, {
+        method: "POST",
+        body: { amount }
+    });
+}
+
+async function getBids(shipmentId) {
+    return apiFetch(`/api/shipments/${shipmentId}/bids`);
+}
+
+async function awardShipment(shipmentId, bidId = null) {
+    return apiFetch(`/api/shipments/${shipmentId}/award`, {
+        method: "POST",
+        body: bidId ? { bid_id: bidId } : {}
+    });
 }
 
 // ---------- UI helpers ----------

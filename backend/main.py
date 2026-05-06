@@ -20,6 +20,22 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE shipments ADD COLUMN delivered_at DATETIME"))
     except Exception:
         pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN pickup_lat FLOAT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN pickup_lng FLOAT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN parent_shipment_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE shipment_destinations ADD COLUMN ack_status TEXT DEFAULT 'none'"))
+    except Exception:
+        pass
 
 # Create all database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -42,7 +58,7 @@ app.add_middleware(
 # Register all routers
 app.include_router(auth.router,      prefix="/api/auth",      tags=["Auth"])
 app.include_router(shipments.router, prefix="/api/shipments", tags=["Shipments"])
-app.include_router(bids.router,      prefix="/api",           tags=["Bids"])
+app.include_router(bids.router,      prefix="/api/shipments",  tags=["Bids"])
 app.include_router(tracking.router,  prefix="/api/track",     tags=["Tracking"])
 
 

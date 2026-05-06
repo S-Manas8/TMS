@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FreightBid — Shipper Dashboard</title>
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         .bid-winner-row td {
             background: rgba(34, 197, 94, 0.07);
@@ -103,15 +105,29 @@
                         <div class="card-title">Post a Load</div>
                     </div>
                     <div id="post-alert"></div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label>Pickup Location</label>
-                            <input type="text" id="pickup" placeholder="Mumbai, MH">
+                    <div class="form-group">
+                        <label>Define Route (Search address OR click on map)</label>
+                        
+                        <div class="grid-2" style="margin-bottom: 12px; gap: 8px;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem;">Set Pickup</label>
+                                <div style="display: flex; gap: 4px;">
+                                    <input type="text" id="search-pickup" placeholder="Type pickup address..." style="font-size: 0.8rem; padding: 6px;">
+                                    <button class="btn btn-outline btn-sm" onclick="searchAddress('pickup')" style="padding: 4px 8px;">🔍</button>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem;">Add Drop</label>
+                                <div style="display: flex; gap: 4px;">
+                                    <input type="text" id="search-drop" placeholder="Type drop address..." style="font-size: 0.8rem; padding: 6px;">
+                                    <button class="btn btn-outline btn-sm" onclick="searchAddress('drop')" style="padding: 4px 8px;">➕</button>
+                                </div>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Drop Location</label>
-                            <input type="text" id="drop" placeholder="Delhi, DL">
-                        </div>
+
+                        <div id="map" style="height: 300px; width: 100%; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 8px;"></div>
+                        <div id="route-text" style="font-size: 0.85rem; color: var(--muted); min-height: 20px;">No points selected.</div>
+                        <button class="btn btn-outline btn-sm" onclick="clearMap()" style="margin-top: 8px;">Clear Map</button>
                     </div>
                     <div class="form-group">
                         <label>Goods Description</label>
@@ -136,7 +152,7 @@
                     <div class="grid-2">
                         <div class="form-group">
                             <label>Deadline (optional)</label>
-                            <input type="datetime-local" id="deadline">
+                            <input type="datetime-local" id="deadline" min="" max="">
                         </div>
                         <div class="form-group">
                             <label>Approx Time (hours)</label>
@@ -176,6 +192,7 @@
                     </div>
                     <div id="detail-route" style="margin-bottom:16px"></div>
                     <div id="detail-meta" class="meta-row" style="margin-bottom:16px"></div>
+                    <div id="detail-map" style="height: 300px; width: 100%; border-radius: 8px; margin-bottom: 12px; display:none; border: 1px solid var(--border);"></div>
                     <hr class="divider">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                         <div style="font-family:var(--font-cond);font-weight:700;font-size:0.9rem;
@@ -204,21 +221,161 @@
         let currentShipmentId = null;
         let myShipments = [];
 
+        // ── Map Setup ──────────────────────────────────────────────
+        let map;
+        let mapMarkers = [];
+        let pickupPoint = null;
+        let dropPoints = [];
+
+        function initMap() {
+            map = L.map('map').setView([20.5937, 78.9629], 5); // India center
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            map.on('click', async function(e) {
+                const address = await reverseGeocode(e.latlng.lat, e.latlng.lng);
+                if (!pickupPoint) {
+                    pickupPoint = { lat: e.latlng.lat, lng: e.latlng.lng, address: address || "Pickup Location" };
+                    const marker = L.marker(e.latlng).addTo(map).bindPopup("Pickup: " + (address || "")).openPopup();
+                    mapMarkers.push(marker);
+                } else {
+                    const drop = { lat: e.latlng.lat, lng: e.latlng.lng, address: address || ("Drop " + (dropPoints.length + 1)) };
+                    dropPoints.push(drop);
+                    const marker = L.marker(e.latlng, {
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41],
+                            iconAnchor: [12, 41],
+                            popupAnchor: [1, -34],
+                            shadowSize: [41, 41]
+                        })
+                    }).addTo(map).bindPopup("Drop: " + (address || drop.address)).openPopup();
+                    mapMarkers.push(marker);
+                }
+                updateRouteText();
+            });
+        }
+
+        function clearMap() {
+            mapMarkers.forEach(m => map.removeLayer(m));
+            mapMarkers = [];
+            pickupPoint = null;
+            dropPoints = [];
+            updateRouteText();
+        }
+
+        function updateRouteText() {
+            const el = document.getElementById("route-text");
+            if (!pickupPoint) {
+                el.textContent = "No points selected. Search or click map for Pickup.";
+            } else {
+                el.textContent = `Pickup selected. ${dropPoints.length} Drop(s) selected.`;
+            }
+        }
+
+        async function searchAddress(type) {
+            const input = document.getElementById(`search-${type}`);
+            const query = input.value.trim();
+            if (!query) return;
+
+            try {
+                const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+                const data = await resp.json();
+                if (data && data.length > 0) {
+                    const result = data[0];
+                    const latlng = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
+                    const address = result.display_name.split(',')[0] + (result.display_name.split(',')[1] ? ', ' + result.display_name.split(',')[1] : '');
+                    
+                    if (type === 'pickup') {
+                        // Remove old pickup marker if exists
+                        if (pickupPoint) {
+                            const oldPickupMarker = mapMarkers.find(m => m.getPopup() && m.getPopup().getContent().includes("Pickup:"));
+                            if (oldPickupMarker) {
+                                map.removeLayer(oldPickupMarker);
+                                mapMarkers = mapMarkers.filter(m => m !== oldPickupMarker);
+                            }
+                        }
+                        pickupPoint = { ...latlng, address: address };
+                        const marker = L.marker(latlng).addTo(map).bindPopup("Pickup: " + address).openPopup();
+                        mapMarkers.push(marker);
+                        map.setView(latlng, 13);
+                    } else {
+                        const drop = { ...latlng, address: address };
+                        dropPoints.push(drop);
+                        const marker = L.marker(latlng, {
+                            icon: L.icon({
+                                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                                iconSize: [25, 41],
+                                iconAnchor: [12, 41],
+                                popupAnchor: [1, -34],
+                                shadowSize: [41, 41]
+                            })
+                        }).addTo(map).bindPopup("Drop: " + address).openPopup();
+                        mapMarkers.push(marker);
+                        map.setView(latlng, 13);
+                    }
+                    updateRouteText();
+                    input.value = "";
+                } else {
+                    alert("Location not found.");
+                }
+            } catch (err) {
+                console.error("Geocoding error", err);
+                alert("Geocoding service unavailable.");
+            }
+        }
+
+        async function reverseGeocode(lat, lng) {
+            try {
+                const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                const data = await resp.json();
+                if (data && data.display_name) {
+                    return data.display_name.split(',')[0] + (data.display_name.split(',')[1] ? ', ' + data.display_name.split(',')[1] : '');
+                }
+            } catch (err) {
+                console.error("Reverse geocoding error", err);
+            }
+            return null;
+        }
+
+        // Init map right away
+        setTimeout(initMap, 100);
+
+        // ── Deadline date bounds: today → exactly 1 year from today ──
+        (function setDeadlineBounds() {
+            const now   = new Date();
+            const oneYearLater = new Date(now);
+            oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
+
+            // datetime-local needs format: YYYY-MM-DDTHH:mm
+            const fmt = d => d.toISOString().slice(0, 16);
+
+            const input = document.getElementById("deadline");
+            input.min = fmt(now);
+            input.max = fmt(oneYearLater);
+        })();
+
         // ── Post Load ──────────────────────────────────────────────
         async function doPostShipment() {
             const btn = document.getElementById("post-btn");
             const alertEl = document.getElementById("post-alert");
             alertEl.innerHTML = "";
 
-            const pickup = document.getElementById("pickup").value.trim();
-            const drop = document.getElementById("drop").value.trim();
             const goods = document.getElementById("goods").value.trim();
             const weight = document.getElementById("weight").value;
             const vehicle = document.getElementById("vehicle").value;
             const deadline = document.getElementById("deadline").value;
             const estTime = document.getElementById("est_time").value;
 
-            if (!pickup || !drop || !goods || !weight) {
+            if (!pickupPoint || dropPoints.length === 0) {
+                alertEl.innerHTML = `<div class="alert alert-error">Please select a Pickup and at least one Drop on the map.</div>`;
+                return;
+            }
+
+            if (!goods || !weight) {
                 alertEl.innerHTML = `<div class="alert alert-error">Please fill in all required fields.</div>`;
                 return;
             }
@@ -228,8 +385,10 @@
 
             try {
                 await postShipment({
-                    pickup_address: pickup,
-                    drop_address: drop,
+                    pickup_address: pickupPoint.address || `Lat: ${pickupPoint.lat.toFixed(4)}, Lng: ${pickupPoint.lng.toFixed(4)}`,
+                    pickup_lat: pickupPoint.lat,
+                    pickup_lng: pickupPoint.lng,
+                    destinations: dropPoints,
                     goods_desc: goods,
                     weight_kg: weight,
                     vehicle_type: vehicle,
@@ -238,9 +397,10 @@
                 });
 
                 alertEl.innerHTML = `<div class="alert alert-success">✓ Load posted successfully!</div>`;
-                ["pickup", "drop", "goods", "weight", "deadline", "est_time"].forEach(id =>
+                ["goods", "weight", "deadline", "est_time"].forEach(id =>
                     document.getElementById(id).value = ""
                 );
+                clearMap();
                 loadMyShipments();
 
             } catch (err) {
@@ -273,7 +433,7 @@
                     <div style="display:flex;justify-content:space-between;
                                 align-items:center;margin-bottom:8px">
                         <div style="font-weight:700;font-size:0.95rem">
-                            ${s.pickup_address} → ${s.drop_address}
+                            ${s.pickup_address} → ${s.destinations && s.destinations.length > 0 ? (s.destinations.length > 1 ? `${s.destinations.length} Stops` : s.destinations[0].address) : (s.drop_address || 'No Drops')}
                         </div>
                         ${statusBadge(s.status)}
                     </div>
@@ -302,6 +462,15 @@
                             <span class="meta-value green">${fmt(s.winning_bid_amount)}</span>
                         </div>` : ""}
                     </div>
+                    ${(() => {
+                        const pendingAcks = (s.destinations || []).filter(d => d.ack_status === 'pending_approval').length;
+                        return pendingAcks > 0
+                            ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(245,158,11,0.12);
+                                          border-radius:6px;font-size:0.78rem;color:#f59e0b;font-family:var(--font-mono);">
+                                   🔔 ${pendingAcks} arrival${pendingAcks > 1 ? 's' : ''} waiting for your approval
+                               </div>`
+                            : '';
+                    })()}
                 </div>
             `).join("");
 
@@ -319,6 +488,92 @@
         }
 
         // ── Select Shipment → Show Bid Panel ───────────────────────
+        // ── Detail Map & Tracking ──────────────────────────────────
+        let detailMap = null;
+        let detailMarkers = [];
+        let driverMarker = null;
+        let trackingPollInterval = null;
+
+        function initDetailMap() {
+            if (detailMap) return;
+            const mapEl = document.getElementById("detail-map");
+            mapEl.style.display = "block";
+            detailMap = L.map('detail-map').setView([20.5937, 78.9629], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(detailMap);
+        }
+
+        function plotShipmentOnMap(s) {
+            initDetailMap();
+            detailMarkers.forEach(m => detailMap.removeLayer(m));
+            detailMarkers = [];
+            if (driverMarker) detailMap.removeLayer(driverMarker);
+            driverMarker = null;
+
+            const points = [];
+            if (s.pickup_lat && s.pickup_lng) {
+                const p = [s.pickup_lat, s.pickup_lng];
+                points.push(p);
+                const m = L.marker(p).addTo(detailMap).bindPopup("Pickup: " + s.pickup_address);
+                detailMarkers.push(m);
+            }
+
+            if (s.destinations) {
+                s.destinations.forEach(d => {
+                    const p = [d.lat, d.lng];
+                    points.push(p);
+                    const m = L.marker(p, {
+                        icon: L.icon({
+                            iconUrl: d.status === 'delivered' ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png' : 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41],
+                            iconAnchor: [12, 41],
+                            popupAnchor: [1, -34],
+                            shadowSize: [41, 41]
+                        })
+                    }).addTo(detailMap).bindPopup("Drop: " + d.address);
+                    detailMarkers.push(m);
+                });
+            }
+
+            if (points.length > 0) {
+                detailMap.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
+            }
+        }
+
+        async function pollDriverLocation(shipmentId) {
+            if (trackingPollInterval) clearInterval(trackingPollInterval);
+            
+            const update = async () => {
+                try {
+                    const data = await getLatestLocation(shipmentId);
+                    if (data && data.lat) {
+                        const pos = [data.lat, data.lng];
+                        if (!driverMarker) {
+                            driverMarker = L.marker(pos, {
+                                icon: L.icon({
+                                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png', // truck icon
+                                    iconSize: [32, 32],
+                                    iconAnchor: [16, 16]
+                                })
+                            }).addTo(detailMap).bindPopup("Driver is here");
+                        } else {
+                            driverMarker.setLatLng(pos);
+                        }
+                    }
+                } catch (e) { console.error("Poll error", e); }
+            };
+
+            update();
+            trackingPollInterval = setInterval(update, 10000);
+        }
+
+        function stopTrackingPoll() {
+            if (trackingPollInterval) clearInterval(trackingPollInterval);
+            trackingPollInterval = null;
+        }
+
         async function selectShipment(id) {
             // Highlight selected card
             document.querySelectorAll(".shipment-card").forEach(c => c.classList.remove("selected"));
@@ -328,16 +583,20 @@
             document.getElementById("detail-placeholder").style.display = "none";
             document.getElementById("detail-panel").classList.add("visible");
 
-            const s = myShipments.find(x => x.id === id);
+            // Always fetch fresh shipment data — never rely on stale myShipments cache
+            let sDetail = null;
+            try {
+                sDetail = await getShipment(id);
+            } catch (err) {
+                console.error("Failed to fetch shipment details", err);
+            }
+
+            const s = sDetail || myShipments.find(x => x.id === id);
+
             if (s) {
                 document.getElementById("detail-title").textContent = s.goods_desc;
                 document.getElementById("detail-status").innerHTML = statusBadge(s.status);
-                document.getElementById("detail-route").innerHTML = `
-                <div class="route-display">
-                    <span class="route-from">${s.pickup_address}</span>
-                    <span class="route-arrow">→</span>
-                    <span class="route-to">${s.drop_address}</span>
-                </div>`;
+                renderDetailRoute(s);
                 document.getElementById("detail-meta").innerHTML = `
                 <div class="meta-item">
                     <span class="meta-label">Weight</span>
@@ -366,12 +625,108 @@
                     <span class="meta-label">Posted</span>
                     <span class="meta-value" style="font-size:0.85rem">${timeAgo(s.created_at)}</span>
                 </div>`;
+
+                plotShipmentOnMap(s);
+                if (s.status === 'in_transit') {
+                    pollDriverLocation(id);
+                } else {
+                    stopTrackingPoll();
+                }
             }
 
             await loadBids(id);
         }
 
+        // ── Render the stops list with ack state for shipper ───────
+        function renderDetailRoute(s) {
+            const dests = (s.destinations || []).slice().sort((a, b) => a.order_index - b.order_index);
+
+            let stopsHtml = "";
+            if (dests.length === 0) {
+                stopsHtml = '<span style="color:var(--muted);font-size:0.85rem;">No destinations</span>';
+            } else {
+                dests.forEach((d, i) => {
+                    const isDelivered = d.status === "delivered";
+                    const isInTransit = s.status === "in_transit";
+
+                    // Icon
+                    let icon;
+                    if (isDelivered) {
+                        icon = "✅";
+                    } else if (d.ack_status === "approved") {
+                        icon = "✔️";
+                    } else if (d.ack_status === "pending_approval") {
+                        icon = "🔔";
+                    } else {
+                        icon = "⏳";
+                    }
+
+                    // Right side — what the shipper sees
+                    let rightSide = "";
+
+                    if (isDelivered) {
+                        // Delivered — green tick
+                        rightSide =
+                            '<span style="font-size:0.72rem;color:var(--green);font-family:var(--font-mono);' +
+                            'background:rgba(34,197,94,0.12);padding:2px 8px;border-radius:4px;">' +
+                            '✅ Delivered</span>';
+
+                    } else if (d.ack_status === "approved") {
+                        // Already approved — driver is on the way to deliver
+                        rightSide =
+                            '<span style="font-size:0.72rem;color:var(--green);font-family:var(--font-mono);' +
+                            'background:rgba(34,197,94,0.12);padding:2px 8px;border-radius:4px;">' +
+                            '✔ Approved</span>';
+
+                    } else if (isInTransit) {
+                        // Pending stop during active trip — show Approve button always
+                        // Badge changes based on whether driver sent ack or not
+                        const driverBadge = d.ack_status === "pending_approval"
+                            ? '<span style="font-size:0.7rem;color:#f59e0b;font-family:var(--font-mono);' +
+                              'background:rgba(245,158,11,0.15);padding:2px 7px;border-radius:4px;margin-right:6px;">' +
+                              '🔔 Driver Arrived</span>'
+                            : '<span style="font-size:0.7rem;color:var(--muted);font-family:var(--font-mono);' +
+                              'margin-right:6px;">pending</span>';
+
+                        rightSide =
+                            driverBadge +
+                            '<button class="btn btn-primary btn-sm" ' +
+                            'style="padding:4px 12px;font-size:0.75rem;font-weight:600;" ' +
+                            'onclick="doApproveArrival(\'' + s.id + '\',\'' + d.id + '\')">' +
+                            '✓ Approve' +
+                            '</button>';
+
+                    } else {
+                        rightSide =
+                            '<span style="font-size:0.72rem;color:var(--muted);">' + d.status + '</span>';
+                    }
+
+                    stopsHtml +=
+                        '<div style="display:flex;justify-content:space-between;align-items:center;' +
+                        'padding:10px 0;border-bottom:1px solid var(--border);">' +
+                            '<span style="font-size:0.9rem;">' +
+                                icon + ' <strong>Stop ' + (i + 1) + ':</strong> ' + d.address +
+                            '</span>' +
+                            '<span style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:12px;">' +
+                                rightSide +
+                            '</span>' +
+                        '</div>';
+                });
+            }
+
+            document.getElementById("detail-route").innerHTML =
+                '<div style="margin-bottom:10px;">' +
+                    '<span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--muted);' +
+                    'text-transform:uppercase;letter-spacing:0.06em;">Pickup</span><br>' +
+                    '<span style="font-weight:700;font-size:0.95rem;">' + s.pickup_address + '</span>' +
+                '</div>' +
+                '<div style="border-left:2px solid var(--border);margin-left:8px;padding-left:14px;">' +
+                    stopsHtml +
+                '</div>';
+        }
+
         // ── Load Bids for Selected Shipment ────────────────────────
+        // Always fetches fresh shipment + bids from server — never uses stale cache
         async function loadBids(shipmentId) {
             const container = document.getElementById("bids-container");
             const awardSection = document.getElementById("award-section");
@@ -379,8 +734,24 @@
             awardSection.innerHTML = "";
 
             try {
-                const bids = await getBids(shipmentId);
-                const s = myShipments.find(x => x.id === shipmentId);
+                // Fetch both in parallel for speed
+                const [bids, sDetail] = await Promise.all([
+                    getBids(shipmentId),
+                    getShipment(shipmentId)
+                ]);
+
+                // Keep myShipments cache in sync so the list card shows correct bid count
+                const idx = myShipments.findIndex(x => x.id === shipmentId);
+                if (idx !== -1) {
+                    myShipments[idx] = { ...myShipments[idx], ...sDetail };
+                    // Update the bid count badge on the shipment card
+                    const cardBidsEl = document.querySelector(`#card-${shipmentId} .meta-value.accent`);
+                    if (cardBidsEl) cardBidsEl.textContent = bids.length;
+                    // Update status badge on the card
+                    document.getElementById("detail-status").innerHTML = statusBadge(sDetail.status);
+                }
+                // Always re-render the route stops so Approve button appears on auto-refresh
+                renderDetailRoute(sDetail);
 
                 if (!bids.length) {
                     container.innerHTML = `
@@ -388,8 +759,14 @@
                         <div class="icon">🎯</div>
                         <p>No bids yet. Drivers will place bids soon.</p>
                     </div>`;
+                    // Still show award section state even with no bids
+                    if (sDetail.status === "delivered") {
+                        renderRatingSection(awardSection, shipmentId, sDetail);
+                    }
                     return;
                 }
+
+                const isOpen = sDetail.status === "open";
 
                 container.innerHTML = `
                 <table class="bid-table">
@@ -398,26 +775,29 @@
                             <th>Driver</th>
                             <th>Amount</th>
                             <th>Time</th>
-                            ${s?.status === "open" ? "<th>Action</th>" : ""}
+                            ${isOpen ? "<th>Action</th>" : ""}
                         </tr>
                     </thead>
                     <tbody>
                         ${bids.map((b, i) => `
                             <tr class="${b.is_winner ? "bid-winner-row" : i === 0 ? "lowest-bid" : ""}">
                                 <td>
-                                    <div style="font-weight:600">${b.driver_name}</div>
+                                    <div style="font-weight:600">
+                                        ${b.driver_name}
+                                        ${b.driver_avg_rating ? `<span style="font-size:0.8rem;color:#f59e0b;margin-left:4px">⭐ ${b.driver_avg_rating.toFixed(1)} (${b.driver_rating_count})</span>` : ""}
+                                    </div>
                                     ${b.driver_phone
-                        ? `<div style="font-size:0.78rem;color:var(--muted)">${b.driver_phone}</div>`
-                        : ""}
+                                        ? `<div style="font-size:0.78rem;color:var(--muted)">${b.driver_phone}</div>`
+                                        : ""}
                                     ${b.is_winner
-                        ? `<span class="bid-winner-badge">✓ WINNER</span>`
-                        : ""}
+                                        ? `<span class="bid-winner-badge">✓ WINNER</span>`
+                                        : ""}
                                 </td>
                                 <td><span class="bid-amount">${fmt(b.amount)}</span></td>
                                 <td style="color:var(--muted);font-size:0.82rem">
                                     ${timeAgo(b.created_at)}
                                 </td>
-                                ${s?.status === "open" ? `
+                                ${isOpen ? `
                                 <td>
                                     <button class="btn btn-outline btn-sm"
                                             onclick="doAward('${shipmentId}','${b.bid_id}')">
@@ -429,8 +809,7 @@
                     </tbody>
                 </table>`;
 
-                // Auto-award button (lowest bid)
-                if (s?.status === "open" && bids.length) {
+                if (isOpen) {
                     const lowest = bids[0];
                     awardSection.innerHTML = `
                     <div style="display:flex;gap:10px;align-items:center">
@@ -442,10 +821,47 @@
                             ${lowest.driver_name}
                         </span>
                     </div>`;
+                } else if (sDetail.status === "delivered") {
+                    renderRatingSection(awardSection, shipmentId, sDetail);
                 }
 
             } catch (err) {
                 container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+            }
+        }
+
+        function renderRatingSection(awardSection, shipmentId, sDetail) {
+            if (sDetail.shipper_rating) {
+                awardSection.innerHTML = `
+                <div class="alert alert-success" style="margin-top: 10px;">
+                    <strong>Rating Given:</strong> ⭐ ${sDetail.shipper_rating}
+                </div>`;
+            } else {
+                awardSection.innerHTML = `
+                <div class="card" style="margin-top: 10px; padding: 16px;">
+                    <div style="font-weight:600; margin-bottom:8px;">Rate the Driver</div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <select id="driver-rating-${shipmentId}" class="form-control" style="width: 100px;">
+                            <option value="5">5 - Excellent</option>
+                            <option value="4">4 - Good</option>
+                            <option value="3">3 - Average</option>
+                            <option value="2">2 - Poor</option>
+                            <option value="1">1 - Terrible</option>
+                        </select>
+                        <button class="btn btn-primary btn-sm" onclick="submitRating('${shipmentId}')">Submit Rating</button>
+                    </div>
+                </div>`;
+            }
+        }
+
+        // ── Approve Driver Arrival ─────────────────────────────────
+        async function doApproveArrival(shipmentId, destId) {
+            try {
+                await approveArrival(shipmentId, destId);
+                // Refresh the detail panel so the badge updates immediately
+                await selectShipment(shipmentId);
+            } catch (err) {
+                alert("Error: " + err.message);
             }
         }
 
@@ -461,6 +877,30 @@
                 alert("Error: " + err.message);
             }
         }
+
+        // ── Submit Rating ──────────────────────────────────────────
+        async function submitRating(shipmentId) {
+            const score = document.getElementById(`driver-rating-${shipmentId}`).value;
+            try {
+                await rateDriver(shipmentId, score);
+                alert("Rating submitted successfully!");
+                await selectShipment(shipmentId);
+            } catch (err) {
+                alert("Error: " + err.message);
+            }
+        }
+
+        // ── Auto-refresh ───────────────────────────────────────────
+        // Refresh shipment list every 15s; refresh open bid panel every 10s
+        setInterval(() => {
+            loadMyShipments();
+        }, 15000);
+
+        setInterval(() => {
+            if (currentShipmentId) {
+                loadBids(currentShipmentId);
+            }
+        }, 10000);
 
         // Init — load shipments on page open
         loadMyShipments();

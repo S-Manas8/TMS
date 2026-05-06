@@ -32,7 +32,7 @@ def get_current_user(authorization: str = Header(None)) -> dict:
 
 
 def require_role(required_role: str):
-    def checker(user: dict = Header(None), authorization: str = Header(None)):
+    def checker(authorization: str = Header(None)):
         current = get_current_user(authorization)
         if current["role"] != required_role:
             raise HTTPException(status_code=403, detail=f"Only {required_role}s can do this")
