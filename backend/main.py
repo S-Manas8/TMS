@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from sqlalchemy import text
-from database import engine, Base
+from database import engine, Base, SessionLocal
 from routers import auth, shipments, bids, tracking
 
 # Perform safe schema migrations (Option 1: keep data)
@@ -18,6 +18,10 @@ with engine.begin() as conn:
         pass
     try:
         conn.execute(text("ALTER TABLE shipments ADD COLUMN delivered_at DATETIME"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN trucks_required INTEGER DEFAULT 1"))
     except Exception:
         pass
 
@@ -46,9 +50,27 @@ app.include_router(bids.router,      prefix="/api",           tags=["Bids"])
 app.include_router(tracking.router,  prefix="/api/track",     tags=["Tracking"])
 
 
+@app.post("/api/admin/reset-db")
+def reset_db():
+    with engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            conn.execute(table.delete())
+    return {"message": "System reset: All data cleared successfully"}
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "message": "FreightBid API is running"}
+
+
+@app.get("/test-db")
+def test_db():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "Connected to SQLite ✅"}
+    except Exception as e:
+        return {"status": "Connection failed ❌", "error": str(e)}
 
 
 # Absolute path — works no matter where uvicorn is run from

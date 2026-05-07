@@ -3,7 +3,10 @@
 // All fetch() calls live here. Import this in every HTML page.
 // ============================================================
 
-const BASE = "";  // same origin — no need for absolute URL
+// Determine if we need to point to the backend explicitly (e.g. if running via file:// or a separate dev server)
+const BASE = (window.location.protocol === "file:" || !window.location.port || window.location.port !== "8000")
+    ? "http://127.0.0.1:8000"
+    : "";
 
 // ---------- Auth helpers (localStorage) ----------
 
@@ -165,4 +168,9 @@ function statusBadge(status) {
     };
     const [icon, color] = map[status] || ["⚪", "#6b7280"];
     return `<span style="color:${color};font-size:0.8rem;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.06em">${icon} ${status.replace("_", " ")}</span>`;
+}
+
+// ---------- Testing Helpers ----------
+async function resetDatabase() {
+    return apiFetch("/api/admin/reset-db", { method: "POST" });
 }

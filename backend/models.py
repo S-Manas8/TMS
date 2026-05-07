@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Boolean, Integer
 from sqlalchemy.dialects.sqlite import TEXT
 from database import Base
 import uuid
@@ -31,6 +31,7 @@ class Shipment(Base):
     goods_desc     = Column(String, nullable=False)
     weight_kg      = Column(Float, nullable=False)
     vehicle_type   = Column(String, default="Truck")  # Truck, Mini Truck, Tempo
+    trucks_required = Column(Integer, default=1)
     deadline       = Column(DateTime)
     est_time_hours = Column(Float, nullable=True)  # Shipper's approx time
     started_at     = Column(DateTime, nullable=True) # When status -> in_transit

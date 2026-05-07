@@ -26,6 +26,14 @@ def create_shipment(
     if data.get("deadline"):
         try:
             deadline = datetime.datetime.fromisoformat(data["deadline"])
+            # Validate that deadline is after the current moment
+            now = datetime.datetime.now()
+            if deadline <= now:
+                 raise HTTPException(400, "Deadline must be after the current date and time")
+        except ValueError:
+            raise HTTPException(400, "Invalid deadline format")
+        except HTTPException:
+            raise
         except Exception:
             pass
 
@@ -36,6 +44,7 @@ def create_shipment(
         goods_desc=data["goods_desc"],
         weight_kg=float(data["weight_kg"]),
         vehicle_type=data.get("vehicle_type", "Truck"),
+        trucks_required=int(data.get("trucks_required", 1)),
         deadline=deadline,
         est_time_hours=data.get("est_time_hours"),
         status="open"
@@ -70,6 +79,7 @@ def get_open_shipments(
             "goods_desc": s.goods_desc,
             "weight_kg": s.weight_kg,
             "vehicle_type": s.vehicle_type,
+            "trucks_required": s.trucks_required,
             "est_time_hours": s.est_time_hours,
             "deadline": s.deadline.isoformat() if s.deadline else None,
             "created_at": s.created_at.isoformat(),
@@ -106,6 +116,7 @@ def get_my_shipments(
             "goods_desc": s.goods_desc,
             "weight_kg": s.weight_kg,
             "vehicle_type": s.vehicle_type,
+            "trucks_required": s.trucks_required,
             "status": s.status,
             "est_time_hours": s.est_time_hours,
             "deadline": s.deadline.isoformat() if s.deadline else None,
@@ -154,6 +165,7 @@ def get_shipment(
         "goods_desc": s.goods_desc,
         "weight_kg": s.weight_kg,
         "vehicle_type": s.vehicle_type,
+        "trucks_required": s.trucks_required,
         "status": s.status,
         "est_time_hours": s.est_time_hours,
         "deadline": s.deadline.isoformat() if s.deadline else None,

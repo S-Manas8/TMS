@@ -75,6 +75,9 @@
             <span style="color:var(--border)">|</span>
             <span style="color:var(--blue);font-size:0.75rem;font-family:var(--font-mono)">DRIVER</span>
             <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+            <button class="btn btn-outline btn-sm" 
+                    onclick="fullReset()" 
+                    style="border-color:var(--red);color:var(--red);opacity:0.8">Clear All</button>
         </div>
     </nav>
 
@@ -172,6 +175,22 @@
 
         document.getElementById("nav-name").textContent = getName();
 
+        async function fullReset() {
+            if (!confirm("This will permanently delete all shipments, bids, and users. Continue?")) return;
+            try {
+                // Clear UI immediately
+                const list = document.getElementById("open-loads-list");
+                if (list) list.innerHTML = `<div class="loading">Clearing system...</div>`;
+                
+                await resetDatabase();
+            } catch (err) {
+                console.error("Database reset failed, clearing local only:", err);
+            } finally {
+                localStorage.clear();
+                window.location.href = "/";
+            }
+        }
+
         let selectedLoad = null;
         let openLoads = [];
         let myBidsMap = {};   // shipment_id → bid amount (my bids on open loads)
@@ -207,6 +226,10 @@
                         <div class="meta-item">
                             <span class="meta-label">Vehicle</span>
                             <span class="meta-value">${s.vehicle_type}</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Vehicles</span>
+                            <span class="meta-value accent">${s.trucks_required || 1}</span>
                         </div>
                         ${s.est_time_hours ? `
                         <div class="meta-item">
@@ -253,6 +276,7 @@
             document.getElementById("bid-panel-meta").innerHTML =
                 `<div class="meta-item"><span class="meta-label">Weight</span><span class="meta-value">${selectedLoad.weight_kg} kg</span></div>
              <div class="meta-item"><span class="meta-label">Vehicle</span><span class="meta-value">${selectedLoad.vehicle_type}</span></div>
+             <div class="meta-item"><span class="meta-label">Vehicles Required</span><span class="meta-value accent">${selectedLoad.trucks_required || 1}</span></div>
              ${selectedLoad.est_time_hours ? `<div class="meta-item"><span class="meta-label">Est. Time</span><span class="meta-value">${selectedLoad.est_time_hours} hours</span></div>` : ""}
              ${selectedLoad.bid_count > 0 ? `<div class="meta-item"><span class="meta-label">Bids So Far</span><span class="meta-value accent">${selectedLoad.bid_count}</span></div>` : ""}
              <div class="meta-item"><span class="meta-label">Posted</span><span class="meta-value" style="font-size:0.85rem">${timeAgo(selectedLoad.created_at)}</span></div>`;
@@ -340,6 +364,10 @@
                             <span class="meta-label">Approx Time</span>
                             <span class="meta-value">${t.est_time_hours}h</span>
                         </div>` : ""}
+                        <div class="meta-item">
+                            <span class="meta-label">Vehicles</span>
+                            <span class="meta-value accent">${t.trucks_required || 1}</span>
+                        </div>
                         ${t.status === 'delivered' && t.started_at && t.delivered_at ? `
                         <div class="meta-item">
                             <span class="meta-label">Time Taken</span>

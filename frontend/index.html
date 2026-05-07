@@ -174,8 +174,8 @@
             <!-- LOGIN FORM -->
             <div id="form-login" class="auth-form active">
                 <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="login-email" placeholder="you@company.com" autocomplete="email">
+                    <label>Email or Phone</label>
+                    <input type="text" id="login-email" placeholder="you@company.com or 9876543210">
                 </div>
                 <div class="form-group">
                     <label>Password</label>
@@ -277,18 +277,71 @@
             }
         }
 
+        function getPhoneError(phone) {
+            if (phone.length !== 10) {
+                return "not a valid number,phone number must contain 10 digits";
+            }
+            if (/^[0-5]/.test(phone)) {
+                return "not a valid number,phone number should not start with 0-5";
+            }
+            return null;
+        }
+
+        function getEmailError(email) {
+            if (!email) return "Email is required";
+            if (email.length > 320) return "Email must not exceed 320 characters";
+            
+            const parts = email.split('@');
+            if (parts.length !== 2) return "Email must contain exactly one @ symbol";
+            
+            const [local, domain] = parts;
+            if (local.length === 0 || local.length > 64) return "Local part must be 1-64 characters";
+            if (domain.length === 0 || domain.length > 255) return "Domain part must be 1-255 characters";
+            
+            // Character restrictions: alphanumeric and specific symbols (., -, _)
+            if (!/^[a-zA-Z0-9._-]+$/.test(local)) return "Email contains invalid characters";
+            if (!/^[a-zA-Z0-9.-]+$/.test(domain)) return "Domain contains invalid characters";
+            
+            // Dot rules
+            if (local.startsWith('.') || local.endsWith('.')) return "Email cannot start or end with a dot";
+            if (local.includes('..')) return "Email cannot contain consecutive dots";
+            
+            // Domain TLD check
+            if (!domain.includes('.') || !/\.[a-zA-Z]{2,}$/.test(domain)) {
+                return "Domain must have a valid Top-Level Domain (e.g., .com)";
+            }
+            
+            return null;
+        }
+
         async function doLogin() {
             hideError();
-            const email = document.getElementById("login-email").value.trim();
+            const identifier = document.getElementById("login-email").value.trim();
             const password = document.getElementById("login-password").value;
 
-            if (!email || !password) {
+            if (!identifier || !password) {
                 showError("Please fill in all fields");
                 return;
             }
 
+            // If it doesn't look like a phone (contains non-digits), validate as email
+            if (!/^\d+$/.test(identifier)) {
+                const emailError = getEmailError(identifier);
+                if (emailError) {
+                    showError(emailError);
+                    return;
+                }
+            } else {
+                // Validate as phone
+                const phoneError = getPhoneError(identifier);
+                if (phoneError) {
+                    showError(phoneError);
+                    return;
+                }
+            }
+
             try {
-                const data = await login(email, password);
+                const data = await login(identifier, password);
                 redirectByRole(data.role);
             } catch (err) {
                 showError(err.message);
@@ -302,8 +355,20 @@
             const phone = document.getElementById("reg-phone").value.trim();
             const password = document.getElementById("reg-password").value;
 
-            if (!name || !email || !password) {
-                showError("Name, email and password are required");
+            if (!name || !password) {
+                showError("Name and password are required");
+                return;
+            }
+
+            const emailError = getEmailError(email);
+            if (emailError) {
+                showError(emailError);
+                return;
+            }
+
+            const phoneError = getPhoneError(phone);
+            if (phoneError) {
+                showError(phoneError);
                 return;
             }
 
