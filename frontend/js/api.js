@@ -142,6 +142,14 @@ async function rateDriver(shipmentId, score) {
     });
 }
 
+async function getDriverProfile(driverId) {
+    return apiFetch(`/api/drivers/${driverId}/profile`);
+}
+
+async function getMyDriverProfile() {
+    return apiFetch(`/api/drivers/me/profile`);
+}
+
 // ---------- Bids ----------
 
 async function placeBid(shipmentId, amount) {
@@ -151,6 +159,9 @@ async function placeBid(shipmentId, amount) {
     });
 }
 
+async function getMyBids() {
+    return apiFetch(`/api/shipments/my-bids`);
+}
 async function getBids(shipmentId) {
     return apiFetch(`/api/shipments/${shipmentId}/bids`);
 }

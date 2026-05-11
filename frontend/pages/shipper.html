@@ -209,7 +209,7 @@
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
+    <script src="/js/api.js?v=2"></script>
     <script>
         // Guard: only shippers allowed
         if (!isLoggedIn() || getRole() !== "shipper") {
@@ -773,6 +773,7 @@
                     <thead>
                         <tr>
                             <th>Driver</th>
+                            <th>Rating</th>
                             <th>Amount</th>
                             <th>Time</th>
                             ${isOpen ? "<th>Action</th>" : ""}
@@ -783,8 +784,10 @@
                             <tr class="${b.is_winner ? "bid-winner-row" : i === 0 ? "lowest-bid" : ""}">
                                 <td>
                                     <div style="font-weight:600">
-                                        ${b.driver_name}
-                                        ${b.driver_avg_rating ? `<span style="font-size:0.8rem;color:#f59e0b;margin-left:4px">⭐ ${b.driver_avg_rating.toFixed(1)} (${b.driver_rating_count})</span>` : ""}
+                                        <a href="#" onclick="showDriverProfile('${b.driver_id}');return false;"
+                                           style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--muted);">
+                                            ${b.driver_name}
+                                        </a>
                                     </div>
                                     ${b.driver_phone
                                         ? `<div style="font-size:0.78rem;color:var(--muted)">${b.driver_phone}</div>`
@@ -792,6 +795,17 @@
                                     ${b.is_winner
                                         ? `<span class="bid-winner-badge">✓ WINNER</span>`
                                         : ""}
+                                </td>
+                                <td>
+                                    ${b.driver_avg_rating
+                                        ? `<div style="white-space:nowrap;">
+                                               ${renderStars(b.driver_avg_rating)}
+                                           </div>
+                                           <div style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono);">
+                                               ${b.driver_avg_rating.toFixed(1)} · ${b.driver_rating_count} trip${b.driver_rating_count !== 1 ? 's' : ''}
+                                           </div>`
+                                        : `<span style="font-size:0.75rem;color:var(--muted);">No ratings yet</span>`
+                                    }
                                 </td>
                                 <td><span class="bid-amount">${fmt(b.amount)}</span></td>
                                 <td style="color:var(--muted);font-size:0.82rem">
@@ -901,6 +915,116 @@
                 loadBids(currentShipmentId);
             }
         }, 10000);
+
+        // ── Star renderer ──────────────────────────────────────────
+        function renderStars(avg) {
+            const full  = Math.floor(avg);
+            const half  = avg - full >= 0.5 ? 1 : 0;
+            const empty = 5 - full - half;
+            return '⭐'.repeat(full) + (half ? '✨' : '') + '☆'.repeat(empty);
+        }
+
+        // ── Driver Profile Modal ───────────────────────────────────
+        async function showDriverProfile(driverId) {
+            // Create or reuse modal
+            let modal = document.getElementById("driver-profile-modal");
+            if (!modal) {
+                modal = document.createElement("div");
+                modal.id = "driver-profile-modal";
+                modal.style.cssText =
+                    "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;" +
+                    "display:flex;align-items:center;justify-content:center;padding:24px;";
+                modal.innerHTML =
+                    '<div id="driver-profile-box" style="background:var(--surface);border:1px solid var(--border);' +
+                    'border-radius:12px;padding:28px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;">' +
+                    '<div class="loading">Loading driver profile...</div></div>';
+                modal.addEventListener("click", e => {
+                    if (e.target === modal) modal.remove();
+                });
+                document.body.appendChild(modal);
+            }
+
+            const box = document.getElementById("driver-profile-box");
+            box.innerHTML = '<div class="loading">Loading driver profile...</div>';
+
+            try {
+                const p = await getDriverProfile(driverId);
+
+                // Star breakdown bar
+                const breakdownHtml = [5,4,3,2,1].map(star => {
+                    const count = p.breakdown[String(star)] || 0;
+                    const pct   = p.total_ratings > 0 ? Math.round((count / p.total_ratings) * 100) : 0;
+                    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:0.82rem;">
+                        <span style="width:16px;text-align:right;color:var(--muted);">${star}</span>
+                        <span style="color:#f59e0b;font-size:0.75rem;">⭐</span>
+                        <div style="flex:1;background:var(--surface2);border-radius:4px;height:8px;overflow:hidden;">
+                            <div style="width:${pct}%;background:#f59e0b;height:100%;border-radius:4px;"></div>
+                        </div>
+                        <span style="width:28px;color:var(--muted);font-family:var(--font-mono);font-size:0.72rem;">${count}</span>
+                    </div>`;
+                }).join("");
+
+                // Rating history
+                const historyHtml = p.history.length === 0
+                    ? '<p style="color:var(--muted);font-size:0.85rem;">No ratings yet.</p>'
+                    : p.history.map(r => `
+                        <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="font-size:0.85rem;font-weight:600;">${r.shipment_goods}</span>
+                                <span style="color:#f59e0b;font-size:0.9rem;">${'⭐'.repeat(Math.round(r.score))} <strong>${r.score}</strong></span>
+                            </div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                By ${r.shipper_name} · ${timeAgo(r.created_at)}
+                            </div>
+                        </div>`).join("");
+
+                box.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+                        <div>
+                            <div style="font-size:1.2rem;font-weight:700;">${p.driver_name}</div>
+                            ${p.driver_phone ? `<div style="font-size:0.82rem;color:var(--muted);">${p.driver_phone}</div>` : ""}
+                        </div>
+                        <button onclick="document.getElementById('driver-profile-modal').remove()"
+                                style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+                    </div>
+
+                    <div style="display:flex;gap:24px;margin-bottom:20px;">
+                        <div style="text-align:center;">
+                            <div style="font-size:2rem;font-weight:700;color:#f59e0b;">
+                                ${p.avg_rating ? p.avg_rating.toFixed(1) : "—"}
+                            </div>
+                            <div style="font-size:0.75rem;color:var(--muted);">Avg Rating</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="font-size:2rem;font-weight:700;">${p.total_ratings}</div>
+                            <div style="font-size:0.75rem;color:var(--muted);">Ratings</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="font-size:2rem;font-weight:700;">${p.completed_trips}</div>
+                            <div style="font-size:0.75rem;color:var(--muted);">Trips Done</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:20px;">
+                        <div style="font-size:0.75rem;font-family:var(--font-mono);color:var(--muted);
+                                    text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">
+                            Rating Breakdown
+                        </div>
+                        ${breakdownHtml}
+                    </div>
+
+                    <div>
+                        <div style="font-size:0.75rem;font-family:var(--font-mono);color:var(--muted);
+                                    text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">
+                            Rating History
+                        </div>
+                        ${historyHtml}
+                    </div>`;
+
+            } catch (err) {
+                box.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+            }
+        }
 
         // Init — load shipments on page open
         loadMyShipments();

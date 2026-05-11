@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,65 +8,16 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        .load-card {
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-
-        .load-card:hover {
-            border-color: var(--accent);
-        }
-
-        .load-card.selected {
-            border-color: var(--accent);
-            background: var(--surface2);
-        }
-
-        .bid-input-row {
-            display: flex;
-            gap: 10px;
-            align-items: flex-end;
-        }
-
-        .bid-input-row input {
-            flex: 1;
-        }
-
-        .my-trip-card {
-            border-left: 3px solid var(--accent);
-        }
-
-        .trip-status-btns {
-            display: flex;
-            gap: 10px;
-            margin-top: 12px;
-        }
-
-        .refresh-btn {
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            color: var(--muted);
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 4px 8px;
-        }
-
-        .refresh-btn:hover {
-            color: var(--accent);
-        }
-
-        .already-bid-badge {
-            font-size: 0.72rem;
-            font-family: var(--font-mono);
-            color: var(--blue);
-            background: rgba(59, 130, 246, 0.12);
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
+        .load-card { cursor:pointer; transition:border-color 0.2s; }
+        .load-card:hover { border-color:var(--accent); }
+        .load-card.selected { border-color:var(--accent); background:var(--surface2); }
+        .bid-input-row { display:flex; gap:10px; align-items:flex-end; }
+        .bid-input-row input { flex:1; }
+        .my-trip-card { border-left:3px solid var(--accent); }
+        .trip-status-btns { display:flex; gap:10px; margin-top:12px; }
+        .already-bid-badge { font-size:0.72rem; font-family:var(--font-mono); color:var(--blue); background:rgba(59,130,246,0.12); padding:2px 8px; border-radius:4px; }
     </style>
 </head>
-
 <body>
 
     <nav class="nav">
@@ -104,22 +54,29 @@
 
         <div class="grid-2" style="gap:24px;align-items:start">
 
-            <!-- LEFT: Open loads to bid on -->
+            <!-- LEFT -->
             <div>
+                <!-- My Rating -->
+                <div class="card" style="margin-bottom:0;">
+                    <div class="card-header">
+                        <div class="card-title">⭐ My Rating</div>
+                    </div>
+                    <div id="my-rating-box"><div class="loading">Loading...</div></div>
+                </div>
+
+                <!-- Available Loads -->
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">Available Loads</div>
                         <button class="refresh-btn" onclick="loadOpenLoads()">↻ Refresh</button>
                     </div>
-                    <div id="open-loads-list">
-                        <div class="loading">Loading...</div>
-                    </div>
+                    <div id="open-loads-list"><div class="loading">Loading...</div></div>
                 </div>
             </div>
 
-            <!-- RIGHT: Bid panel + My Trips -->
+            <!-- RIGHT -->
             <div>
-                <!-- Bid Detail Panel -->
+                <!-- Bid Placeholder -->
                 <div class="card" id="bid-placeholder">
                     <div class="empty-state">
                         <div class="icon">🚛</div>
@@ -127,6 +84,7 @@
                     </div>
                 </div>
 
+                <!-- Bid Detail Panel -->
                 <div class="card" id="bid-panel" style="display:none">
                     <div class="card-header">
                         <div class="card-title" id="bid-panel-title">Load Detail</div>
@@ -151,449 +109,30 @@
                     <div id="bid-alert" style="margin-top:12px"></div>
                 </div>
 
+                <!-- My Active Bids -->
+                <div class="card" style="margin-top:0">
+                    <div class="card-header">
+                        <div class="card-title">💰 My Active Bids</div>
+                        <button class="refresh-btn" onclick="loadMyActiveBids()">↻ Refresh</button>
+                    </div>
+                    <div id="my-bids-list"><div class="loading">Loading...</div></div>
+                </div>
+
                 <!-- My Trips -->
                 <div class="card" style="margin-top:0">
                     <div class="card-header">
                         <div class="card-title">My Trips</div>
                         <button class="refresh-btn" onclick="loadMyTrips()">↻ Refresh</button>
                     </div>
-                    <div id="trip-map" style="height: 250px; width: 100%; border-radius: 8px; margin-bottom: 12px; display:none; border: 1px solid var(--border);"></div>
-                    <div id="my-trips-list">
-                        <div class="loading">Loading...</div>
-                    </div>
+                    <div id="trip-map" style="height:250px;width:100%;border-radius:8px;margin-bottom:12px;display:none;border:1px solid var(--border);"></div>
+                    <div id="my-trips-list"><div class="loading">Loading...</div></div>
                 </div>
             </div>
 
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
-    <script>
-        if (!isLoggedIn() || getRole() !== "driver") {
-            window.location.href = "/";
-        }
-
-        document.getElementById("nav-name").textContent = getName();
-
-        let selectedLoad = null;
-        let openLoads = [];
-        let myBidsMap = {};   // shipment_id → bid amount (my bids on open loads)
-
-        // ── Open Loads ─────────────────────────────────────────────
-        async function loadOpenLoads() {
-            const container = document.getElementById("open-loads-list");
-            try {
-                openLoads = await getOpenShipments();
-                document.getElementById("stat-open").textContent = openLoads.length;
-
-                if (!openLoads.length) {
-                    container.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No open loads right now. Check back soon.</p></div>`;
-                    return;
-                }
-
-                container.innerHTML = openLoads.map(s => `
-                <div class="load-card card" style="margin-bottom:10px;padding:16px"
-                     id="lcard-${s.id}" onclick="selectLoad('${s.id}')">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <div style="font-weight:700;font-size:0.95rem">${s.pickup_address} → ${s.destinations && s.destinations.length > 0 ? (s.destinations.length > 1 ? s.destinations.length + ' Stops' : s.destinations[0].address) : (s.drop_address || 'N/A')}</div>
-                        ${myBidsMap[s.id] ? `<span class="already-bid-badge">Bid: ${fmt(myBidsMap[s.id])}</span>` : ""}
-                    </div>
-                    <div class="meta-row" style="gap:16px">
-                        <div class="meta-item">
-                            <span class="meta-label">Goods</span>
-                            <span class="meta-value" style="font-size:0.85rem">${s.goods_desc}</span>
-                        </div>
-                        <div class="meta-item">
-                            <span class="meta-label">Weight</span>
-                            <span class="meta-value">${s.weight_kg} kg</span>
-                        </div>
-                        <div class="meta-item">
-                            <span class="meta-label">Vehicle</span>
-                            <span class="meta-value">${s.vehicle_type}</span>
-                        </div>
-                        ${s.est_time_hours ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Est. Time</span>
-                            <span class="meta-value">${s.est_time_hours}h</span>
-                        </div>` : ""}
-                        ${s.bid_count > 0 ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Bids</span>
-                            <span class="meta-value accent">${s.bid_count}</span>
-                        </div>` : ""}
-                    </div>
-                    ${s.deadline ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:6px;font-family:var(--font-mono)">
-                        Deadline: ${new Date(s.deadline).toLocaleString()}
-                    </div>` : ""}
-                </div>
-            `).join("");
-
-            } catch (err) {
-                container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
-            }
-        }
-
-        // ── Select Load → Show Bid Panel ───────────────────────────
-        async function selectLoad(id) {
-            document.querySelectorAll(".load-card").forEach(c => c.classList.remove("selected"));
-            document.getElementById(`lcard-${id}`)?.classList.add("selected");
-
-            selectedLoad = openLoads.find(x => x.id === id);
-            if (!selectedLoad) return;
-
-            document.getElementById("bid-placeholder").style.display = "none";
-            document.getElementById("bid-panel").style.display = "block";
-            document.getElementById("bid-alert").innerHTML = "";
-
-            document.getElementById("bid-panel-title").textContent = selectedLoad.goods_desc;
-            document.getElementById("bid-panel-status").innerHTML = statusBadge(selectedLoad.status);
-            const destDisplay = selectedLoad.destinations && selectedLoad.destinations.length > 0
-                ? selectedLoad.destinations.map(d => `<div style="font-size:0.85rem; margin-left:8px;">📍 ${d.address}</div>`).join('')
-                : `<span class="route-to">${selectedLoad.drop_address || 'N/A'}</span>`;
-            document.getElementById("bid-panel-route").innerHTML =
-                `<div class="route-display" style="flex-direction:column;align-items:flex-start;gap:6px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span class="route-from">${selectedLoad.pickup_address}</span>
-                    <span class="route-arrow">→</span>
-                </div>
-                ${destDisplay}
-            </div>`;
-            document.getElementById("bid-panel-meta").innerHTML =
-                `<div class="meta-item"><span class="meta-label">Weight</span><span class="meta-value">${selectedLoad.weight_kg} kg</span></div>
-             <div class="meta-item"><span class="meta-label">Vehicle</span><span class="meta-value">${selectedLoad.vehicle_type}</span></div>
-             ${selectedLoad.est_time_hours ? `<div class="meta-item"><span class="meta-label">Est. Time</span><span class="meta-value">${selectedLoad.est_time_hours} hours</span></div>` : ""}
-             ${selectedLoad.bid_count > 0 ? `<div class="meta-item"><span class="meta-label">Bids So Far</span><span class="meta-value accent">${selectedLoad.bid_count}</span></div>` : ""}
-             <div class="meta-item"><span class="meta-label">Posted</span><span class="meta-value" style="font-size:0.85rem">${timeAgo(selectedLoad.created_at)}</span></div>`;
-
-            // Check if driver already bid
-            const myBid = myBidsMap[id];
-            if (myBid) {
-                document.getElementById("bid-panel-myBid").innerHTML =
-                    `<div class="alert alert-success">✓ You bid ${fmt(myBid)} — you can lower it below.</div>`;
-                document.getElementById("bid-amount").value = myBid;
-                document.getElementById("bid-btn").textContent = "Update Bid";
-            } else {
-                document.getElementById("bid-panel-myBid").innerHTML = "";
-                document.getElementById("bid-amount").value = "";
-                document.getElementById("bid-btn").textContent = "Place Bid";
-            }
-        }
-
-        // ── Place / Update Bid ─────────────────────────────────────
-        async function doPlaceBid() {
-            const alertEl = document.getElementById("bid-alert");
-            const btn = document.getElementById("bid-btn");
-            const amount = document.getElementById("bid-amount").value;
-
-            if (!selectedLoad) return;
-            if (!amount || Number(amount) <= 0) {
-                alertEl.innerHTML = `<div class="alert alert-error">Enter a valid bid amount.</div>`;
-                return;
-            }
-
-            btn.disabled = true;
-            btn.textContent = "Submitting...";
-
-            try {
-                const result = await placeBid(selectedLoad.id, Number(amount));
-                myBidsMap[selectedLoad.id] = Number(amount);
-                alertEl.innerHTML = `<div class="alert alert-success">✓ ${result.message}</div>`;
-                document.getElementById("bid-btn").textContent = "Update Bid";
-                document.getElementById("bid-panel-myBid").innerHTML =
-                    `<div class="alert alert-success">✓ You bid ${fmt(amount)} — you can lower it below.</div>`;
-                loadOpenLoads();   // refresh card badges
-            } catch (err) {
-                alertEl.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
-        // ── My Trips ───────────────────────────────────────────────
-        async function loadMyTrips() {
-            const container = document.getElementById("my-trips-list");
-            try {
-                const trips = await getMyShipments();
-                const active = trips.filter(t => ["assigned", "in_transit"].includes(t.status)).length;
-                const completed = trips.filter(t => t.status === "delivered").length;
-                const myBids = trips.reduce((n, t) => n + (t.bids || []).length, 0);
-
-                document.getElementById("stat-mybids").textContent = myBids;
-                document.getElementById("stat-active").textContent = active;
-                document.getElementById("stat-done").textContent = completed;
-
-                if (!trips.length) {
-                    container.innerHTML = `<div class="empty-state"><div class="icon">🏁</div><p>No assigned trips yet. Win a bid to get started.</p></div>`;
-                    document.getElementById("trip-map").style.display = "none";
-                    stopTracking();
-                    return;
-                }
-
-                const activeTrip = trips.find(t => t.status === 'in_transit');
-                if (activeTrip) {
-                    plotTripOnMap(activeTrip);
-                    startTracking(activeTrip.id);
-                } else {
-                    const assignedTrip = trips.find(t => t.status === 'assigned');
-                    if (assignedTrip) plotTripOnMap(assignedTrip);
-                    else document.getElementById("trip-map").style.display = "none";
-                    stopTracking();
-                }
-
-                container.innerHTML = trips.map(t => `
-                <div class="card my-trip-card fade-in" style="margin-bottom:12px;padding:16px">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <div style="font-weight:700">${t.pickup_address} → ${t.destinations && t.destinations.length > 0 ? (t.destinations.length > 1 ? t.destinations.length + ' Stops' : t.destinations[0].address) : (t.drop_address || 'N/A')}</div>
-                        ${statusBadge(t.status)}
-                    </div>
-                    <div class="meta-row" style="gap:16px;margin-bottom:0">
-                        <div class="meta-item">
-                            <span class="meta-label">Goods</span>
-                            <span class="meta-value" style="font-size:0.85rem">${t.goods_desc}</span>
-                        </div>
-                        ${t.winning_bid_amount ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Earned</span>
-                            <span class="meta-value green">${fmt(t.winning_bid_amount)}</span>
-                        </div>` : ""}
-                        ${t.est_time_hours ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Approx Time</span>
-                            <span class="meta-value">${t.est_time_hours}h</span>
-                        </div>` : ""}
-                        ${t.status === 'delivered' && t.started_at && t.delivered_at ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Time Taken</span>
-                            <span class="meta-value green">${calculateTimeTaken(t.started_at, t.delivered_at)}</span>
-                        </div>` : ""}
-                    </div>
-                    ${renderTripButtons(t)}
-                </div>
-            `).join("");
-
-            } catch (err) {
-                container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
-            }
-        }
-
-        function renderTripButtons(trip) {
-            if (trip.status === "assigned") {
-                return `<div class="trip-status-btns">
-                <button class="btn btn-primary btn-sm" onclick="doUpdateStatus('${trip.id}','in_transit')">
-                    🚚 Start Trip
-                </button>
-            </div>`;
-            }
-            if (trip.status === "in_transit") {
-                let html = `<div style="margin-top: 12px; font-weight: 600; font-size: 0.85rem;">Route Stops:</div>`;
-                html += `<ul style="margin: 8px 0; padding-left: 20px; font-size: 0.85rem;">`;
-
-                if (trip.destinations && trip.destinations.length > 0) {
-                    const sorted = [...trip.destinations].sort((a, b) => a.order_index - b.order_index);
-
-                    // The "active" stop is the first one not yet delivered
-                    const nextIdx = sorted.findIndex(d => d.status !== "delivered");
-
-                    sorted.forEach((d, i) => {
-                        const isDelivered = d.status === "delivered";
-                        const isActive    = i === nextIdx;
-                        const isFuture    = !isDelivered && !isActive;
-
-                        let icon, label;
-
-                        if (isDelivered) {
-                            icon  = "✅";
-                            label = `<span style="font-size:0.7rem;color:var(--muted);margin-left:6px;">Delivered</span>`;
-
-                        } else if (isActive) {
-                            // Three sub-states based on ack_status
-                            if (d.ack_status === "none" || !d.ack_status) {
-                                // Driver hasn't sent arrival yet
-                                icon  = "📍";
-                                label = `<button class="btn btn-primary btn-sm"
-                                            style="margin-left:8px; padding: 2px 8px; font-size: 0.7rem;"
-                                            onclick="doSendArrival('${trip.id}', '${d.id}')">
-                                            I've Arrived
-                                         </button>`;
-
-                            } else if (d.ack_status === "pending_approval") {
-                                // Waiting for shipper
-                                icon  = "⏳";
-                                label = `<span style="margin-left:8px; font-size:0.7rem;
-                                              color:#f59e0b; font-family:var(--font-mono);">
-                                              Waiting for shipper approval...
-                                         </span>`;
-
-                            } else if (d.ack_status === "approved") {
-                                // Shipper approved — can now mark delivered
-                                icon  = "✔️";
-                                label = `<button class="btn btn-outline btn-sm"
-                                            style="margin-left:8px; padding: 2px 8px; font-size: 0.7rem;
-                                                   border-color:var(--green); color:var(--green);"
-                                            onclick="doMarkDestDelivered('${trip.id}', '${d.id}')">
-                                            Mark Delivered
-                                         </button>`;
-                            }
-
-                        } else {
-                            // Future stop — locked
-                            icon  = "🔒";
-                            label = `<span style="margin-left:8px; font-size:0.7rem; color:var(--muted);">
-                                         Complete stop ${i} first
-                                     </span>`;
-                        }
-
-                        html += `<li style="margin-bottom: 8px; ${isFuture ? 'opacity:0.45;' : ''}">
-                            ${icon} <strong>Stop ${i + 1}:</strong> ${d.address} ${label}
-                        </li>`;
-                    });
-                } else {
-                    html += `<li>No multi-stop data — <button class="btn btn-outline btn-sm" onclick="doUpdateStatus('${trip.id}','delivered')">Mark Delivered</button></li>`;
-                }
-
-                html += `</ul>`;
-
-                // Abandon — only after at least one stop is delivered
-                const sorted = trip.destinations ? [...trip.destinations].sort((a, b) => a.order_index - b.order_index) : [];
-                const anyDelivered = sorted.some(d => d.status === "delivered");
-                const anyPending   = sorted.some(d => d.status !== "delivered");
-
-                if (anyDelivered && anyPending) {
-                    html += `<div class="trip-status-btns">
-                        <button class="btn btn-outline btn-sm"
-                                onclick="doEndTripEarly('${trip.id}')"
-                                style="color: red; border-color: red;">
-                            ⚠️ End Trip Early (Abandon)
-                        </button>
-                    </div>`;
-                }
-
-                return html;
-            }
-            if (trip.status === "delivered") {
-                return "";
-            }
-            return "";
-        }
-
-        async function doSendArrival(shipmentId, destId) {
-            try {
-                await sendArrivalAck(shipmentId, destId);
-                await loadMyTrips();
-            } catch (err) {
-                alert("Error: " + err.message);
-            }
-        }
-
-        async function doMarkDestDelivered(shipmentId, destId) {
-            if (!confirm(`Confirm: mark this stop as delivered?`)) return;
-            try {
-                await updateDestinationStatus(shipmentId, destId, "delivered");
-                await loadMyTrips();
-            } catch (err) {
-                alert("Error: " + err.message);
-            }
-        }
-
-        async function doEndTripEarly(shipmentId) {
-            if (!confirm(`Are you sure you want to end this trip early? You will only be paid for the distance covered, and the remaining stops will be sent back to bidding.`)) return;
-            try {
-                await abandonShipment(shipmentId);
-                await loadMyTrips();
-                await loadOpenLoads(); // Refresh available loads
-                alert("Trip ended. You have been paid proportionally.");
-            } catch (err) {
-                alert("Error: " + err.message);
-            }
-        }
-
-        // ── Tracking Logic ─────────────────────────────────────────
-        let trackingInterval = null;
-        let driverMap = null;
-        let mapMarkers = [];
-
-        function initDriverMap() {
-            if (driverMap) return;
-            const mapEl = document.getElementById("trip-map");
-            mapEl.style.display = "block";
-            driverMap = L.map('trip-map').setView([20.5937, 78.9629], 5);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(driverMap);
-        }
-
-        function plotTripOnMap(trip) {
-            initDriverMap();
-            mapMarkers.forEach(m => driverMap.removeLayer(m));
-            mapMarkers = [];
-
-            const points = [];
-            if (trip.pickup_lat && trip.pickup_lng) {
-                const p = [trip.pickup_lat, trip.pickup_lng];
-                points.push(p);
-                const m = L.marker(p).addTo(driverMap).bindPopup("Pickup: " + trip.pickup_address);
-                mapMarkers.push(m);
-            }
-
-            if (trip.destinations) {
-                trip.destinations.forEach(d => {
-                    const p = [d.lat, d.lng];
-                    points.push(p);
-                    const m = L.marker(p, {
-                        icon: L.icon({
-                            iconUrl: d.status === 'delivered' ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png' : 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                            iconSize: [25, 41],
-                            iconAnchor: [12, 41],
-                            popupAnchor: [1, -34],
-                            shadowSize: [41, 41]
-                        })
-                    }).addTo(driverMap).bindPopup("Drop: " + d.address);
-                    mapMarkers.push(m);
-                });
-            }
-
-            if (points.length > 0) {
-                driverMap.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
-            }
-        }
-
-        function startTracking(shipmentId) {
-            if (trackingInterval) clearInterval(trackingInterval);
-            trackingInterval = setInterval(() => {
-                if (navigator.geolocation) {
-                    navigator.geolocation.getCurrentPosition(pos => {
-                        sendDriverLocation(shipmentId, pos.coords.latitude, pos.coords.longitude)
-                            .catch(e => console.error("Tracking error", e));
-                    }, err => console.warn("Geolocation error", err));
-                }
-            }, 15000);
-        }
-
-        function stopTracking() {
-            if (trackingInterval) clearInterval(trackingInterval);
-            trackingInterval = null;
-        }
-
-        async function doUpdateStatus(shipmentId, status) {
-            const label = status === "in_transit" ? "start this trip" : "mark as delivered";
-            if (!confirm(`Confirm: ${label}?`)) return;
-            try {
-                await updateShipmentStatus(shipmentId, status);
-                if (status === 'in_transit') startTracking(shipmentId);
-                else stopTracking();
-                await loadMyTrips();
-            } catch (err) {
-                alert("Error: " + err.message);
-            }
-        }
-
-        // Init
-        loadOpenLoads();
-        loadMyTrips();
-
-        // Auto-refresh trips every 8s so driver sees shipper approval without manual refresh
-        setInterval(() => loadMyTrips(), 8000);
-    </script>
+    <script src="/js/api.js?v=2"></script>
+    <script src="/js/driver.js?v=2"></script>
 </body>
 </html>

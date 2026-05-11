@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from sqlalchemy import text
 from database import engine, Base
-from routers import auth, shipments, bids, tracking
+from routers import auth, shipments, bids, tracking, drivers
 
 # Perform safe schema migrations (Option 1: keep data)
 with engine.begin() as conn:
@@ -60,6 +60,7 @@ app.include_router(auth.router,      prefix="/api/auth",      tags=["Auth"])
 app.include_router(shipments.router, prefix="/api/shipments", tags=["Shipments"])
 app.include_router(bids.router,      prefix="/api/shipments",  tags=["Bids"])
 app.include_router(tracking.router,  prefix="/api/track",     tags=["Tracking"])
+app.include_router(drivers.router,   prefix="/api/drivers",   tags=["Drivers"])
 
 
 @app.get("/api/health")

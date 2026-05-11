@@ -173,6 +173,70 @@ def get_my_shipments(
     return result
 
 
+@router.get("/my-bids")
+def get_my_bids(
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """
+    Driver fetches all their bids with full shipment details.
+    Must be registered BEFORE /{shipment_id} to avoid route conflict.
+    """
+    user = get_current_user(authorization)
+    if user["role"] != "driver":
+        raise HTTPException(403, "Only drivers can access their bids")
+
+    bids = (
+        db.query(Bid, Shipment)
+        .join(Shipment, Shipment.id == Bid.shipment_id)
+        .filter(Bid.driver_id == user["sub"])
+        .order_by(Bid.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for bid, shipment in bids:
+        lowest = (
+            db.query(Bid)
+            .filter(Bid.shipment_id == shipment.id)
+            .order_by(Bid.amount)
+            .first()
+        )
+        lowest_amount = lowest.amount if lowest else None
+        is_my_bid_lowest = lowest_amount is not None and bid.amount <= lowest_amount
+
+        # Detect abandoned trip: shipment is "delivered" but a child shipment was
+        # created for the remaining stops (parent_shipment_id points back to this one)
+        was_abandoned = False
+        if bid.is_winner and shipment.status == "delivered":
+            child = db.query(Shipment).filter(
+                Shipment.parent_shipment_id == shipment.id
+            ).first()
+            was_abandoned = child is not None
+
+        result.append({
+            "bid_id":             bid.id,
+            "my_amount":          bid.amount,
+            "is_winner":          bid.is_winner,
+            "was_abandoned":      was_abandoned,
+            "placed_at":          bid.created_at.isoformat(),
+            "is_lowest":          is_my_bid_lowest,
+            "lowest_amount":      lowest_amount,
+            "shipment_id":        shipment.id,
+            "shipment_status":    shipment.status,
+            "pickup_address":     shipment.pickup_address,
+            "drop_address":       shipment.drop_address,
+            "goods_desc":         shipment.goods_desc,
+            "weight_kg":          shipment.weight_kg,
+            "vehicle_type":       shipment.vehicle_type,
+            "deadline":           shipment.deadline.isoformat() if shipment.deadline else None,
+            "winning_bid_amount": shipment.winning_bid_amount,
+            "total_bids":         db.query(Bid).filter(Bid.shipment_id == shipment.id).count(),
+        })
+
+    return result
+
+
 @router.get("/{shipment_id}")
 def get_shipment(
     shipment_id: str,
