@@ -136,17 +136,37 @@
                     <div class="grid-2">
                         <div class="form-group">
                             <label>Weight (kg)</label>
-                            <input type="number" id="weight" placeholder="2500">
+                            <input type="number" id="weight" placeholder="2500" oninput="autoCalcTrucks()" min="1">
                         </div>
                         <div class="form-group">
                             <label>Vehicle Type</label>
-                            <select id="vehicle">
+                            <select id="vehicle" onchange="autoCalcTrucks()">
                                 <option>Truck</option>
                                 <option>Mini Truck</option>
                                 <option>Container</option>
                                 <option>Tempo</option>
                                 <option>Trailer</option>
                             </select>
+                        </div>
+                    </div>
+
+                    <!-- Truck count — auto-calculated, shipper can only increase -->
+                    <div class="form-group" id="truck-count-group" style="display:none;">
+                        <label>Number of Vehicles
+                            <span id="truck-count-hint" style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono);margin-left:6px;"></span>
+                        </label>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <button type="button" onclick="changeTruckCount(-1)"
+                                    style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);
+                                           background:var(--surface2);font-size:1.1rem;cursor:pointer;color:var(--muted);"
+                                    id="truck-dec-btn">−</button>
+                            <input type="number" id="num_trucks" value="1" min="1"
+                                   style="width:70px;text-align:center;font-size:1.1rem;font-weight:700;"
+                                   oninput="validateTruckCount()">
+                            <button type="button" onclick="changeTruckCount(1)"
+                                    style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);
+                                           background:var(--surface2);font-size:1.1rem;cursor:pointer;">+</button>
+                            <span id="truck-weight-per" style="font-size:0.82rem;color:var(--muted);"></span>
                         </div>
                     </div>
                     <div class="grid-2">
@@ -223,12 +243,18 @@
 
         // ── Map Setup ──────────────────────────────────────────────
         let map;
-        let mapMarkers = [];
         let pickupPoint = null;
-        let dropPoints = [];
+        let dropPoints  = [];
+        let redIcon     = null;  // initialized inside initMap() after Leaflet is ready
 
         function initMap() {
-            map = L.map('map').setView([20.5937, 78.9629], 5); // India center
+            // Define icon here — L is guaranteed loaded at this point
+            redIcon = L.icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41]
+            });
+            map = L.map('map').setView([20.5937, 78.9629], 5);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
@@ -236,95 +262,198 @@
             map.on('click', async function(e) {
                 const address = await reverseGeocode(e.latlng.lat, e.latlng.lng);
                 if (!pickupPoint) {
-                    pickupPoint = { lat: e.latlng.lat, lng: e.latlng.lng, address: address || "Pickup Location" };
-                    const marker = L.marker(e.latlng).addTo(map).bindPopup("Pickup: " + (address || "")).openPopup();
-                    mapMarkers.push(marker);
+                    const marker = L.marker(e.latlng).addTo(map)
+                        .bindPopup("Pickup: " + (address || "")).openPopup();
+                    pickupPoint = { lat: e.latlng.lat, lng: e.latlng.lng, address: address || "Pickup Location", marker };
                 } else {
                     const drop = { lat: e.latlng.lat, lng: e.latlng.lng, address: address || ("Drop " + (dropPoints.length + 1)) };
+                    const marker = L.marker(e.latlng, { icon: redIcon }).addTo(map)
+                        .bindPopup("Drop: " + drop.address).openPopup();
+                    drop.marker = marker;
                     dropPoints.push(drop);
-                    const marker = L.marker(e.latlng, {
-                        icon: L.icon({
-                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                            iconSize: [25, 41],
-                            iconAnchor: [12, 41],
-                            popupAnchor: [1, -34],
-                            shadowSize: [41, 41]
-                        })
-                    }).addTo(map).bindPopup("Drop: " + (address || drop.address)).openPopup();
-                    mapMarkers.push(marker);
                 }
-                updateRouteText();
+                renderRouteList();
             });
         }
 
         function clearMap() {
-            mapMarkers.forEach(m => map.removeLayer(m));
-            mapMarkers = [];
+            if (pickupPoint) map.removeLayer(pickupPoint.marker);
+            dropPoints.forEach(d => map.removeLayer(d.marker));
             pickupPoint = null;
-            dropPoints = [];
-            updateRouteText();
+            dropPoints  = [];
+            renderRouteList();
         }
 
-        function updateRouteText() {
+        // Remove pickup point individually
+        function removePickup() {
+            if (pickupPoint) { map.removeLayer(pickupPoint.marker); pickupPoint = null; }
+            renderRouteList();
+        }
+
+        // Remove a specific drop point by index
+        function removeDrop(idx) {
+            if (dropPoints[idx]) { map.removeLayer(dropPoints[idx].marker); dropPoints.splice(idx, 1); }
+            renderRouteList();
+        }
+
+        // Haversine distance between two lat/lng points — returns km
+        function haversine(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2)
+                    + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180)
+                    * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function fmtDist(km) {
+            return km < 1 ? (km * 1000).toFixed(0) + ' m' : km.toFixed(1) + ' km';
+        }
+
+        // Render the route list with per-leg distances and total distance
+        function renderRouteList() {
             const el = document.getElementById("route-text");
-            if (!pickupPoint) {
-                el.textContent = "No points selected. Search or click map for Pickup.";
-            } else {
-                el.textContent = `Pickup selected. ${dropPoints.length} Drop(s) selected.`;
+            if (!pickupPoint && dropPoints.length === 0) {
+                el.innerHTML = '<span style="color:var(--muted);">No points selected. Search or click map for Pickup.</span>';
+                return;
             }
+
+            // Build ordered list of all points: pickup + drops
+            const allPoints = pickupPoint
+                ? [{ ...pickupPoint, label: 'PICKUP', color: 'var(--blue)', isPickup: true }]
+                : [];
+            dropPoints.forEach((d, i) => allPoints.push({ ...d, label: `STOP ${i+1}`, color: 'var(--accent)', isPickup: false, idx: i }));
+
+            // Calculate leg distances
+            let totalKm = 0;
+            const legs = [];  // legs[i] = distance from allPoints[i-1] to allPoints[i]
+            for (let i = 1; i < allPoints.length; i++) {
+                const km = haversine(allPoints[i-1].lat, allPoints[i-1].lng, allPoints[i].lat, allPoints[i].lng);
+                legs.push(km);
+                totalKm += km;
+            }
+
+            let html = '<div style="display:flex;flex-direction:column;gap:0;margin-top:4px;">';
+
+            allPoints.forEach((p, i) => {
+                const removeBtn = p.isPickup
+                    ? `<button onclick="removePickup()" title="Remove pickup" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:0 4px;line-height:1;" onmouseover="this.style.color='red'" onmouseout="this.style.color='var(--muted)'">✕</button>`
+                    : `<button onclick="removeDrop(${p.idx})" title="Remove stop" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:0 4px;line-height:1;" onmouseover="this.style.color='red'" onmouseout="this.style.color='var(--muted)'">✕</button>`;
+
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;
+                                     background:var(--surface2);border-radius:6px;padding:7px 10px;
+                                     border-left:3px solid ${p.color};">
+                    <span style="font-size:0.82rem;">
+                        <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--muted);margin-right:6px;">${p.label}</span>
+                        ${p.address}
+                    </span>
+                    ${removeBtn}
+                </div>`;
+
+                // Show leg distance arrow between stops
+                if (i < allPoints.length - 1) {
+                    html += `<div style="display:flex;align-items:center;gap:6px;padding:3px 14px;">
+                        <div style="width:1px;height:16px;background:var(--border);margin-left:4px;"></div>
+                        <span style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono);">
+                            ↓ ${fmtDist(legs[i])}
+                        </span>
+                    </div>`;
+                }
+            });
+
+            // Total distance summary
+            if (allPoints.length >= 2) {
+                html += `<div style="margin-top:8px;padding:7px 10px;background:rgba(245,158,11,0.08);
+                                     border-radius:6px;border:1px solid rgba(245,158,11,0.2);
+                                     display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:0.78rem;color:var(--muted);">Total Route Distance</span>
+                    <span style="font-size:0.9rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">
+                        ${fmtDist(totalKm)}
+                    </span>
+                </div>`;
+            }
+
+            html += '</div>';
+            el.innerHTML = html;
         }
 
         async function searchAddress(type) {
             const input = document.getElementById(`search-${type}`);
-            const query = input.value.trim();
-            if (!query) return;
+            const raw   = input.value.trim();
+            if (!raw) return;
+
+            // Clean the query for Nominatim:
+            // - Remove PIN/ZIP codes (6-digit Indian or 5-digit US)
+            // - Remove " - " separators common in Indian addresses
+            // - Collapse extra spaces
+            function cleanQuery(q) {
+                return q
+                    .replace(/[-–]\s*\d{5,6}\b/g, '')   // remove "- 500035" or "– 500035"
+                    .replace(/\b\d{6}\b/g, '')            // remove standalone 6-digit PIN
+                    .replace(/\b\d{5}\b/g, '')            // remove standalone 5-digit ZIP
+                    .replace(/\s{2,}/g, ' ')
+                    .replace(/,\s*,/g, ',')
+                    .trim()
+                    .replace(/,\s*$/, '');                // trailing comma
+            }
+
+            // If first attempt fails, progressively simplify:
+            // e.g. "Lakshmi Nagar, Road No 3, Kothapet, Hyderabad"
+            //   → "Kothapet, Hyderabad"
+            //   → "Hyderabad"
+            function simplifyQuery(q) {
+                const parts = q.split(',').map(p => p.trim()).filter(Boolean);
+                if (parts.length <= 1) return null;
+                return parts.slice(1).join(', ');
+            }
+
+            async function trySearch(q) {
+                const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=in&q=${encodeURIComponent(q)}`;
+                const resp = await fetch(url);
+                const data = await resp.json();
+                return data && data.length > 0 ? data : null;
+            }
 
             try {
-                const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
-                const data = await resp.json();
-                if (data && data.length > 0) {
-                    const result = data[0];
-                    const latlng = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
-                    const address = result.display_name.split(',')[0] + (result.display_name.split(',')[1] ? ', ' + result.display_name.split(',')[1] : '');
-                    
-                    if (type === 'pickup') {
-                        // Remove old pickup marker if exists
-                        if (pickupPoint) {
-                            const oldPickupMarker = mapMarkers.find(m => m.getPopup() && m.getPopup().getContent().includes("Pickup:"));
-                            if (oldPickupMarker) {
-                                map.removeLayer(oldPickupMarker);
-                                mapMarkers = mapMarkers.filter(m => m !== oldPickupMarker);
-                            }
-                        }
-                        pickupPoint = { ...latlng, address: address };
-                        const marker = L.marker(latlng).addTo(map).bindPopup("Pickup: " + address).openPopup();
-                        mapMarkers.push(marker);
-                        map.setView(latlng, 13);
-                    } else {
-                        const drop = { ...latlng, address: address };
-                        dropPoints.push(drop);
-                        const marker = L.marker(latlng, {
-                            icon: L.icon({
-                                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-                                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                                iconSize: [25, 41],
-                                iconAnchor: [12, 41],
-                                popupAnchor: [1, -34],
-                                shadowSize: [41, 41]
-                            })
-                        }).addTo(map).bindPopup("Drop: " + address).openPopup();
-                        mapMarkers.push(marker);
-                        map.setView(latlng, 13);
+                let query = cleanQuery(raw);
+                let results = await trySearch(query);
+
+                // Retry with simplified query if nothing found
+                if (!results) {
+                    let simplified = simplifyQuery(query);
+                    while (simplified && !results) {
+                        results = await trySearch(simplified);
+                        simplified = simplifyQuery(simplified);
                     }
-                    updateRouteText();
-                    input.value = "";
-                } else {
-                    alert("Location not found.");
                 }
+
+                if (!results) {
+                    alert(`Location not found: "${raw}"\n\nTip: Try a shorter address like "Kothapet, Hyderabad" or click directly on the map.`);
+                    return;
+                }
+
+                const result  = results[0];
+                const latlng  = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
+                // Use the original raw input as the display address (more readable than Nominatim's)
+                const address = raw.replace(/\s*[-–]\s*\d{5,6}\b/g, '').trim();
+
+                if (type === 'pickup') {
+                    if (pickupPoint) map.removeLayer(pickupPoint.marker);
+                    const marker = L.marker(latlng).addTo(map).bindPopup("Pickup: " + address).openPopup();
+                    pickupPoint = { ...latlng, address, marker };
+                    map.setView(latlng, 14);
+                } else {
+                    const marker = L.marker(latlng, { icon: redIcon }).addTo(map).bindPopup("Drop: " + address).openPopup();
+                    dropPoints.push({ ...latlng, address, marker });
+                    map.setView(latlng, 14);
+                }
+                renderRouteList();
+                input.value = "";
+
             } catch (err) {
                 console.error("Geocoding error", err);
-                alert("Geocoding service unavailable.");
+                alert("Geocoding service unavailable. Please click directly on the map.");
             }
         }
 
@@ -358,6 +487,84 @@
             input.max = fmt(oneYearLater);
         })();
 
+        // ── Truck count auto-calculation ───────────────────────────
+        // Capacity per vehicle type in kg
+        const VEHICLE_CAPACITY = {
+            "Truck":      1000,
+            "Mini Truck":  500,
+            "Container":  5000,
+            "Tempo":       300,
+            "Trailer":   10000
+        };
+
+        let minTrucks = 1;  // minimum required — cannot go below this
+
+        function autoCalcTrucks() {
+            const weight  = parseFloat(document.getElementById("weight").value) || 0;
+            const vehicle = document.getElementById("vehicle").value;
+            const group   = document.getElementById("truck-count-group");
+
+            if (weight <= 0) {
+                group.style.display = "none";
+                return;
+            }
+
+            group.style.display = "block";
+
+            const capacity = VEHICLE_CAPACITY[vehicle] || 1000;
+            const required = Math.ceil(weight / capacity);
+            minTrucks = required;
+
+            const current = parseInt(document.getElementById("num_trucks").value) || 0;
+            // Only increase if current is below required minimum
+            if (current < required) {
+                document.getElementById("num_trucks").value = required;
+            }
+
+            updateTruckUI();
+        }
+
+        function changeTruckCount(delta) {
+            const input   = document.getElementById("num_trucks");
+            const current = parseInt(input.value) || minTrucks;
+            const next    = current + delta;
+
+            if (next < minTrucks) return;  // cannot go below minimum
+            input.value = next;
+            updateTruckUI();
+        }
+
+        function validateTruckCount() {
+            const input   = document.getElementById("num_trucks");
+            const current = parseInt(input.value) || 0;
+            if (current < minTrucks) {
+                input.value = minTrucks;
+            }
+            updateTruckUI();
+        }
+
+        function updateTruckUI() {
+            const weight   = parseFloat(document.getElementById("weight").value) || 0;
+            const vehicle  = document.getElementById("vehicle").value;
+            const count    = parseInt(document.getElementById("num_trucks").value) || 1;
+            const capacity = VEHICLE_CAPACITY[vehicle] || 1000;
+
+            // Hint: "min 2 required"
+            document.getElementById("truck-count-hint").textContent =
+                `(min ${minTrucks} required for ${weight} kg)`;
+
+            // Per-truck weight
+            const perTruck = count > 0 ? Math.ceil(weight / count) : 0;
+            document.getElementById("truck-weight-per").textContent =
+                perTruck > 0 ? `≈ ${perTruck.toLocaleString()} kg per vehicle` : "";
+
+            // Disable − button if at minimum
+            const decBtn = document.getElementById("truck-dec-btn");
+            decBtn.disabled = count <= minTrucks;
+            decBtn.style.opacity = count <= minTrucks ? "0.35" : "1";
+            decBtn.style.cursor  = count <= minTrucks ? "not-allowed" : "pointer";
+        }
+
         // ── Post Load ──────────────────────────────────────────────
         async function doPostShipment() {
             const btn = document.getElementById("post-btn");
@@ -388,10 +595,11 @@
                     pickup_address: pickupPoint.address || `Lat: ${pickupPoint.lat.toFixed(4)}, Lng: ${pickupPoint.lng.toFixed(4)}`,
                     pickup_lat: pickupPoint.lat,
                     pickup_lng: pickupPoint.lng,
-                    destinations: dropPoints,
+                    destinations: dropPoints.map(d => ({ address: d.address, lat: d.lat, lng: d.lng })),
                     goods_desc: goods,
                     weight_kg: weight,
                     vehicle_type: vehicle,
+                    num_trucks: parseInt(document.getElementById("num_trucks").value) || 1,
                     deadline: deadline || null,
                     est_time_hours: estTime ? Number(estTime) : null
                 });
@@ -400,6 +608,9 @@
                 ["goods", "weight", "deadline", "est_time"].forEach(id =>
                     document.getElementById(id).value = ""
                 );
+                document.getElementById("num_trucks").value = 1;
+                document.getElementById("truck-count-group").style.display = "none";
+                minTrucks = 1;
                 clearMap();
                 loadMyShipments();
 

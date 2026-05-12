@@ -364,7 +364,7 @@ let mapMarkers       = [];
 function initDriverMap() {
     if (driverMap) return;
     document.getElementById('trip-map').style.display = 'block';
-    driverMap = L.map('trip-map').setView([20.5937, 78.9629], 5);
+    driverMap = L.map('trip-map').setView([20.5937, 78.9629], 5); 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(driverMap);
 }
 

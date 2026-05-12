@@ -36,6 +36,7 @@ class Shipment(Base):
     deadline           = Column(DateTime, nullable=True)
     est_time_hours     = Column(Float, nullable=True)
     parent_shipment_id = Column(TEXT, nullable=True)
+    num_trucks         = Column(Integer, nullable=False, default=1)
 
     # Status flow: open → assigned → in_transit → delivered
     status             = Column(String, default="open")

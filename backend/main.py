@@ -36,6 +36,10 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE shipment_destinations ADD COLUMN ack_status TEXT DEFAULT 'none'"))
     except Exception:
         pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN num_trucks INTEGER DEFAULT 1"))
+    except Exception:
+        pass
 
 # Create all database tables on startup
 Base.metadata.create_all(bind=engine)

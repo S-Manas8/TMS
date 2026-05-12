@@ -58,6 +58,7 @@ def create_shipment(
         vehicle_type=data.get("vehicle_type", "Truck"),
         deadline=deadline,
         est_time_hours=data.get("est_time_hours"),
+        num_trucks=int(data.get("num_trucks", 1)),
         status="open"
     )
     destinations = data.get("destinations", [])
