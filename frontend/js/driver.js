@@ -257,12 +257,38 @@ async function loadMyTrips() {
         }
 
         const activeTrip = trips.find(t => t.status === 'in_transit');
-        if (activeTrip) { plotTripOnMap(activeTrip); startTracking(activeTrip.id); }
+        if (activeTrip) { plotTripOnMap(activeTrip); startTracking(activeTrip.id); startProofRequestPolling(activeTrip.id); }
         else {
             const assignedTrip = trips.find(t => t.status === 'assigned');
             if (assignedTrip) plotTripOnMap(assignedTrip);
             else document.getElementById('trip-map').style.display = 'none';
             stopTracking();
+            stopProofRequestPolling();
+        }
+
+        // Remember which photo sections are currently open so we can restore after re-render
+        const openSections = new Set(
+            [...document.querySelectorAll('[id^="photo-section-"]')]
+                .filter(el => el.style.display !== 'none')
+                .map(el => el.id)
+        );
+
+        // Fetch pending proof requests for in-transit trips so we can render inline
+        const proofMap = {};
+        for (const t of trips.filter(t => t.status === 'in_transit')) {
+            try {
+                const reqs = await getProofRequests(t.id);
+                const pending = reqs.find(r => r.status === 'pending');
+                proofMap[t.id] = pending ? pending.request_id : null;
+            } catch (e) { proofMap[t.id] = null; }
+        }
+
+        // Fetch uploaded photos for in_transit and delivered trips
+        const photosMap = {};
+        for (const t of trips.filter(t => ['in_transit','delivered'].includes(t.status))) {
+            try {
+                photosMap[t.id] = await getShipmentPhotos(t.id);
+            } catch (e) { photosMap[t.id] = []; }
         }
 
         container.innerHTML = trips.map(t => {
@@ -280,12 +306,193 @@ async function loadMyTrips() {
                     ${t.est_time_hours ? `<div class="meta-item"><span class="meta-label">Approx Time</span><span class="meta-value">${t.est_time_hours}h</span></div>` : ''}
                     ${t.status === 'delivered' && t.started_at && t.delivered_at ? `<div class="meta-item"><span class="meta-label">Time Taken</span><span class="meta-value green">${calculateTimeTaken(t.started_at, t.delivered_at)}</span></div>` : ''}
                 </div>
+                ${renderProofRequestInline(t, proofMap[t.id])}
                 ${renderTripButtons(t)}
+                ${renderDriverPhotoHistory(t, photosMap[t.id] || [])}
             </div>`;
         }).join('');
+
+        // Restore open photo sections
+        openSections.forEach(sectionId => {
+            const body  = document.getElementById(sectionId);
+            const arrow = document.getElementById(sectionId + '-arrow');
+            if (body)  body.style.display  = 'block';
+            if (arrow) arrow.style.transform = 'rotate(180deg)';
+        });
+
     } catch (err) {
         container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
     }
+}
+
+// ── Inline proof request block inside trip card ───────────────
+function renderProofRequestInline(trip, pendingRequestId) {
+    if (trip.status !== 'in_transit') return '';
+    if (!pendingRequestId) return '';
+
+    return `
+        <div style="margin-top:14px;padding:14px;background:rgba(245,158,11,0.1);
+                    border:2px solid #f59e0b;border-radius:10px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <span style="font-size:1.3rem;">📸</span>
+                <div>
+                    <div style="font-weight:700;font-size:0.88rem;color:#f59e0b;">Shipper Requested Proof</div>
+                    <div style="font-size:0.75rem;color:#94a3b8;margin-top:1px;">Take a photo of the goods and upload it now</div>
+                </div>
+            </div>
+            <label style="display:flex;align-items:center;justify-content:center;gap:8px;
+                           padding:10px;background:#f59e0b;color:#000;font-weight:700;
+                           border-radius:8px;cursor:pointer;font-size:0.85rem;width:100%;box-sizing:border-box;">
+                📷 Take / Upload Proof Photo
+                <input type="file" accept="image/*" capture="environment" style="display:none"
+                    onchange="doFulfillProofRequest('${trip.id}','${pendingRequestId}',this)">
+            </label>
+        </div>`;
+}
+
+// ── Photo history inside trip card (driver view) ──────────────
+function renderDriverPhotoHistory(trip, photos) {
+    if (!photos || photos.length === 0) return '';
+
+    const sectionId = `photo-section-${trip.id}`;
+
+    const rows = photos.map(p => {
+        const isProof   = p.pod_type === 'proof_request';
+        const isRejected = p.ack_status === 'rejected';
+        const isApproved = p.ack_status === 'approved';
+
+        const typeLabel = isProof
+            ? '<span style="font-size:0.68rem;font-family:var(--font-mono);color:#f59e0b;background:rgba(245,158,11,0.15);padding:1px 6px;border-radius:4px;">🔔 Proof</span>'
+            : '<span style="font-size:0.68rem;font-family:var(--font-mono);color:var(--green);background:rgba(34,197,94,0.12);padding:1px 6px;border-radius:4px;">✅ Delivery</span>';
+
+        const ackBadge = isApproved
+            ? '<span style="font-size:0.68rem;color:var(--green);font-family:var(--font-mono);margin-left:4px;">✅ Approved</span>'
+            : isRejected
+            ? '<span style="font-size:0.68rem;color:#ef4444;font-family:var(--font-mono);margin-left:4px;">❌ Rejected</span>'
+            : '<span style="font-size:0.68rem;color:#f59e0b;font-family:var(--font-mono);margin-left:4px;">⏳ Pending</span>';
+
+        const location = p.dest_address
+            ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">📍 ${p.dest_address}</div>`
+            : `<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">On-demand proof</div>`;
+
+        const dt      = new Date(p.uploaded_at);
+        const dateStr = dt.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+        const timeStr = dt.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' });
+
+        // Rejection notice + re-upload button
+        const rejectionBlock = isRejected ? `
+            <div style="margin-top:8px;padding:8px 10px;background:rgba(239,68,68,0.1);
+                        border:1px solid #ef4444;border-radius:6px;">
+                <div style="font-size:0.72rem;color:#ef4444;font-weight:600;margin-bottom:4px;">
+                    ❌ Shipper rejected this photo
+                </div>
+                ${p.ack_notes ? `<div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">"${p.ack_notes}"</div>` : ''}
+                <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+                               padding:5px 10px;background:#ef4444;color:#fff;border-radius:6px;
+                               font-size:0.75rem;font-weight:600;">
+                    📷 Re-upload Photo
+                    <input type="file" accept="image/*" capture="environment" style="display:none"
+                        onchange="doReuploadPhoto('${trip.id}','${p.dest_id || ''}','${p.pod_id}',this)">
+                </label>
+            </div>` : '';
+
+        const borderColor = isApproved ? 'var(--green)' : isRejected ? '#ef4444' : 'var(--border)';
+
+        return `
+            <div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;
+                        border-bottom:1px solid var(--border);">
+                <img src="${p.image_url}" alt="photo"
+                     onclick="driverOpenPhoto('${p.image_url}','${(p.dest_address||'Proof Photo').replace(/'/g,"\\'")}','${p.uploaded_at}','${(p.shipper_name||'').replace(/'/g,"\\'")}')"
+                     style="width:64px;height:64px;object-fit:cover;border-radius:6px;
+                            cursor:pointer;flex-shrink:0;border:2px solid ${borderColor};">
+                <div style="flex:1;min-width:0;">
+                    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+                        ${typeLabel}${ackBadge}
+                        <span style="font-size:0.7rem;color:var(--muted);margin-left:2px;">${dateStr} · ${timeStr}</span>
+                    </div>
+                    ${location}
+                    <div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">
+                        👤 <strong style="color:var(--text);">${p.shipper_name || 'Unknown'}</strong>
+                        ${p.shipper_phone ? `· ${p.shipper_phone}` : ''}
+                    </div>
+                    ${rejectionBlock}
+                </div>
+            </div>`;
+    }).join('');
+
+    return `
+        <div style="margin-top:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+            <button onclick="togglePhotoSection('${sectionId}')"
+                    style="width:100%;display:flex;justify-content:space-between;align-items:center;
+                           padding:10px 14px;background:var(--surface2);border:none;cursor:pointer;
+                           font-size:0.82rem;font-weight:600;color:var(--text);">
+                <span>📷 Delivery Photos <span style="font-size:0.72rem;font-family:var(--font-mono);
+                      color:var(--muted);font-weight:400;margin-left:4px;">${photos.length} photo${photos.length !== 1 ? 's' : ''}</span>
+                ${photos.some(p => p.ack_status === 'rejected') ? '<span style="font-size:0.7rem;color:#ef4444;margin-left:6px;">⚠ Action needed</span>' : ''}
+                </span>
+                <span id="${sectionId}-arrow" style="font-size:0.75rem;color:var(--muted);transition:transform 0.2s;">▼</span>
+            </button>
+            <div id="${sectionId}" style="display:none;padding:0 14px;">
+                ${rows}
+            </div>
+        </div>`;
+}
+
+function togglePhotoSection(sectionId) {
+    const body  = document.getElementById(sectionId);
+    const arrow = document.getElementById(sectionId + '-arrow');
+    if (!body) return;
+    const isOpen = body.style.display !== 'none';
+    body.style.display  = isOpen ? 'none' : 'block';
+    arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+// ── Driver photo full-screen viewer ──────────────────────────
+function driverOpenPhoto(url, label, uploadedAt, shipperName) {
+    const existing = document.getElementById('driver-photo-modal');
+    if (existing) existing.remove();
+
+    const dt      = new Date(uploadedAt);
+    const dateStr = dt.toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
+    const timeStr = dt.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' });
+
+    const modal = document.createElement('div');
+    modal.id = 'driver-photo-modal';
+    modal.style.cssText = `
+        position:fixed;inset:0;background:rgba(0,0,0,0.88);
+        z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px;
+    `;
+    modal.innerHTML = `
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+                    max-width:520px;width:100%;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,0.5);">
+            <!-- Header -->
+            <div style="padding:14px 18px;border-bottom:1px solid var(--border);
+                        display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <div style="font-weight:700;font-size:0.9rem;">📷 ${label}</div>
+                    <div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">
+                        ${dateStr} at ${timeStr}
+                        ${shipperName ? ` · Shipper: <strong>${shipperName}</strong>` : ''}
+                    </div>
+                </div>
+                <button onclick="document.getElementById('driver-photo-modal').remove()"
+                        style="background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;">✕</button>
+            </div>
+            <!-- Image -->
+            <div style="background:#000;display:flex;align-items:center;justify-content:center;max-height:60vh;overflow:hidden;">
+                <img src="${url}" alt="Photo"
+                     style="max-width:100%;max-height:60vh;object-fit:contain;display:block;">
+            </div>
+            <!-- Footer -->
+            <div style="padding:12px 18px;display:flex;justify-content:flex-end;gap:8px;">
+                <a href="${url}" download target="_blank"
+                   class="btn btn-outline btn-sm" style="font-size:0.78rem;">⬇ Download</a>
+                <button onclick="document.getElementById('driver-photo-modal').remove()"
+                        class="btn btn-outline btn-sm" style="font-size:0.78rem;">✕ Close</button>
+            </div>
+        </div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
 }
 
 function renderTripButtons(trip) {
@@ -310,7 +517,14 @@ function renderTripButtons(trip) {
                     } else if (d.ack_status === 'pending_approval') {
                         icon = '⏳'; label = '<span style="margin-left:8px;font-size:0.7rem;color:#f59e0b;font-family:var(--font-mono);">Waiting for shipper approval...</span>';
                     } else if (d.ack_status === 'approved') {
-                        icon = '✔️'; label = `<button class="btn btn-outline btn-sm" style="margin-left:8px;padding:2px 8px;font-size:0.7rem;border-color:var(--green);color:var(--green);" onclick="doMarkDestDelivered('${trip.id}','${d.id}')">Mark Delivered</button>`;
+                        icon = '✔️';
+                        label = `
+                            <button class="btn btn-outline btn-sm" style="margin-left:8px;padding:2px 8px;font-size:0.7rem;border-color:var(--green);color:var(--green);" onclick="doMarkDestDelivered('${trip.id}','${d.id}')">Mark Delivered</button>
+                            <label class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 8px;font-size:0.7rem;cursor:pointer;" title="Upload delivery photo">
+                                📷 Photo
+                                <input type="file" accept="image/*" capture="environment" style="display:none"
+                                    onchange="doUploadDeliveryPhoto('${trip.id}','${d.id}',this)">
+                            </label>`;
                     }
                 } else {
                     icon = '🔒'; label = `<span style="margin-left:8px;font-size:0.7rem;color:var(--muted);">Complete stop ${i} first</span>`;
@@ -464,4 +678,306 @@ async function loadMyRating() {
 loadMyRating();
 loadMyTrips();
 loadMyActiveBids().then(() => loadOpenLoads());
-setInterval(() => loadMyTrips(), 8000);
+
+// Lightweight background refresh — only updates stats + proof banners,
+// never rebuilds the trip cards HTML so photo sections stay open.
+setInterval(refreshTripStats, 10000);
+
+async function refreshTripStats() {
+    try {
+        const trips = await getMyShipments();
+        const active    = trips.filter(t => ['assigned','in_transit'].includes(t.status)).length;
+        const completed = trips.filter(t => t.status === 'delivered').length;
+        document.getElementById('stat-active').textContent = active;
+        document.getElementById('stat-done').textContent   = completed;
+
+        // Check proof requests for in-transit trips without re-rendering
+        for (const t of trips.filter(t => t.status === 'in_transit')) {
+            try {
+                const reqs    = await getProofRequests(t.id);
+                const pending = reqs.find(r => r.status === 'pending');
+                if (pending && pending.request_id !== activeProofRequestId) {
+                    activeProofRequestId = pending.request_id;
+                    showProofRequestBanner(t.id, pending.request_id);
+                    const inlineEl = document.getElementById(`proof-inline-${t.id}`);
+                    if (inlineEl) inlineEl.style.display = 'block';
+                } else if (!pending) {
+                    const banner = document.getElementById('proof-request-banner');
+                    if (banner) banner.remove();
+                    if (activeProofRequestId) activeProofRequestId = null;
+                }
+            } catch (e) { /* silent */ }
+
+            // Check if any photos were rejected — auto-open photo section so driver sees it
+            try {
+                const photos   = await getShipmentPhotos(t.id);
+                const rejected = photos.some(p => p.ack_status === 'rejected');
+                if (rejected) {
+                    const sectionId = `photo-section-${t.id}`;
+                    const body      = document.getElementById(sectionId);
+                    const arrow     = document.getElementById(sectionId + '-arrow');
+                    if (body && body.style.display === 'none') {
+                        body.style.display    = 'block';
+                        if (arrow) arrow.style.transform = 'rotate(180deg)';
+                        showToast('⚠️ Shipper rejected a photo — please re-upload', 'error');
+                    }
+                }
+            } catch (e) { /* silent */ }
+        }
+    } catch (e) { /* silent */ }
+}
+
+// ── Delivery Photo Upload ─────────────────────────────────────
+async function doUploadDeliveryPhoto(shipmentId, destId, inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+    inputEl.value = '';
+    showPhotoPreviewModal({
+        file,
+        title: '📷 Delivery Photo Preview',
+        subtitle: 'Review the photo before uploading as proof of delivery',
+        confirmLabel: '✅ Upload as Delivery Proof',
+        onConfirm: async () => {
+            try {
+                await uploadDeliveryPhoto(shipmentId, destId, file);
+                showToast('📷 Delivery photo uploaded!', 'success');
+            } catch (err) {
+                showToast('Upload failed: ' + err.message, 'error');
+            }
+        }
+    });
+}
+
+// ── Re-upload after shipper rejection ────────────────────────
+async function doReuploadPhoto(shipmentId, destId, oldPodId, inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+    inputEl.value = '';
+    showPhotoPreviewModal({
+        file,
+        title: '📷 Re-upload Photo',
+        subtitle: 'Shipper rejected the previous photo — review before sending',
+        confirmLabel: '📤 Send New Photo',
+        onConfirm: async () => {
+            try {
+                // Use "none" as destId when photo is not tied to a specific stop
+                const effectiveDestId = destId || 'none';
+                await uploadDeliveryPhoto(shipmentId, effectiveDestId, file, 'Re-uploaded after shipper rejection');
+                showToast('📷 New photo sent to shipper!', 'success');
+                await loadMyTrips();
+            } catch (err) {
+                showToast('Upload failed: ' + err.message, 'error');
+            }
+        }
+    });
+}
+
+// ── Proof Request Polling ─────────────────────────────────────
+// Check every 12 seconds if shipper has raised a proof request
+let proofPollInterval = null;
+let activeProofRequestId = null;
+
+function startProofRequestPolling(shipmentId) {
+    if (proofPollInterval) clearInterval(proofPollInterval);
+    proofPollInterval = setInterval(() => checkProofRequests(shipmentId), 12000);
+}
+
+function stopProofRequestPolling() {
+    if (proofPollInterval) clearInterval(proofPollInterval);
+    proofPollInterval = null;
+    activeProofRequestId = null;
+}
+
+async function checkProofRequests(shipmentId) {
+    try {
+        const requests = await getProofRequests(shipmentId);
+        const pending  = requests.find(r => r.status === 'pending');
+        if (pending && pending.request_id !== activeProofRequestId) {
+            activeProofRequestId = pending.request_id;
+            showProofRequestBanner(shipmentId, pending.request_id);
+        } else if (!pending) {
+            // Remove banner if no pending request
+            const banner = document.getElementById('proof-request-banner');
+            if (banner) banner.remove();
+            activeProofRequestId = null;
+        }
+    } catch (e) { /* silent */ }
+}
+
+function showProofRequestBanner(shipmentId, requestId) {
+    // Remove existing banner
+    const existing = document.getElementById('proof-request-banner');
+    if (existing) existing.remove();
+
+    const banner = document.createElement('div');
+    banner.id = 'proof-request-banner';
+    banner.style.cssText = `
+        position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+        background: #1e293b; border: 2px solid #f59e0b; border-radius: 12px;
+        padding: 18px 24px; z-index: 999; max-width: 420px; width: 90%;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    `;
+    banner.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <span style="font-size:1.5rem;">📸</span>
+            <div>
+                <div style="font-weight:700;font-size:0.95rem;color:#f59e0b;">Shipper Requested Proof</div>
+                <div style="font-size:0.78rem;color:#94a3b8;margin-top:2px;">Please take a photo of the goods now</div>
+            </div>
+        </div>
+        <label style="display:block;width:100%;text-align:center;padding:10px;background:#f59e0b;
+                       color:#000;font-weight:700;border-radius:8px;cursor:pointer;font-size:0.9rem;">
+            📷 Take / Upload Photo
+            <input type="file" accept="image/*" capture="environment" style="display:none"
+                onchange="doFulfillProofRequest('${shipmentId}','${requestId}',this)">
+        </label>
+        <button onclick="document.getElementById('proof-request-banner').remove()"
+                style="margin-top:8px;width:100%;background:none;border:1px solid #334155;
+                       color:#94a3b8;border-radius:8px;padding:6px;cursor:pointer;font-size:0.8rem;">
+            Dismiss (respond later)
+        </button>
+    `;
+    document.body.appendChild(banner);
+}
+
+async function doFulfillProofRequest(shipmentId, requestId, inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+    inputEl.value = '';
+    showPhotoPreviewModal({
+        file,
+        title: '📸 Proof Photo Preview',
+        subtitle: 'Shipper requested this — review before sending',
+        confirmLabel: '📤 Send to Shipper',
+        onConfirm: async () => {
+            try {
+                await fulfillProofRequest(shipmentId, requestId, file);
+                const banner = document.getElementById('proof-request-banner');
+                if (banner) banner.remove();
+                activeProofRequestId = null;
+                showToast('✅ Proof photo sent to shipper!', 'success');
+                await loadMyTrips();
+            } catch (err) {
+                showToast('Upload failed: ' + err.message, 'error');
+            }
+        }
+    });
+}
+
+// ── Photo Preview Modal ───────────────────────────────────────
+// Shows a preview of the selected image before uploading.
+// Options: { file, title, subtitle, confirmLabel, onConfirm }
+function showPhotoPreviewModal({ file, title, subtitle, confirmLabel, onConfirm }) {
+    const existing = document.getElementById('photo-preview-modal');
+    if (existing) existing.remove();
+
+    const objectUrl = URL.createObjectURL(file);
+    const sizeMB    = (file.size / (1024 * 1024)).toFixed(2);
+
+    const modal = document.createElement('div');
+    modal.id = 'photo-preview-modal';
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.82);
+        z-index: 2000; display: flex; align-items: center;
+        justify-content: center; padding: 20px;
+    `;
+
+    modal.innerHTML = `
+        <div style="background: var(--surface); border: 1px solid var(--border);
+                    border-radius: 14px; max-width: 480px; width: 100%;
+                    overflow: hidden; box-shadow: 0 16px 48px rgba(0,0,0,0.5);">
+
+            <!-- Header -->
+            <div style="padding: 16px 20px; border-bottom: 1px solid var(--border);
+                        display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-weight: 700; font-size: 0.95rem;">${title}</div>
+                    <div style="font-size: 0.75rem; color: var(--muted); margin-top: 2px;">${subtitle}</div>
+                </div>
+                <button id="ppm-close" style="background:none;border:none;color:var(--muted);
+                        font-size:1.3rem;cursor:pointer;padding:4px 8px;line-height:1;">✕</button>
+            </div>
+
+            <!-- Image preview -->
+            <div style="background: #000; position: relative; max-height: 55vh; overflow: hidden;
+                        display: flex; align-items: center; justify-content: center;">
+                <img id="ppm-img" src="${objectUrl}" alt="Preview"
+                     style="max-width: 100%; max-height: 55vh; object-fit: contain; display: block;">
+            </div>
+
+            <!-- File info -->
+            <div style="padding: 10px 20px; background: var(--surface2);
+                        display: flex; gap: 16px; font-size: 0.78rem; color: var(--muted);
+                        border-bottom: 1px solid var(--border);">
+                <span>📄 ${file.name}</span>
+                <span>📦 ${sizeMB} MB</span>
+                <span>🖼 ${file.type.split('/')[1].toUpperCase()}</span>
+            </div>
+
+            <!-- Re-select option -->
+            <div style="padding: 10px 20px; border-bottom: 1px solid var(--border);">
+                <label style="display: inline-flex; align-items: center; gap: 6px;
+                               font-size: 0.8rem; color: var(--muted); cursor: pointer;">
+                    <input type="file" id="ppm-reselect" accept="image/*" capture="environment"
+                           style="display:none">
+                    🔄 Choose a different photo
+                </label>
+            </div>
+
+            <!-- Actions -->
+            <div style="padding: 16px 20px; display: flex; gap: 10px;">
+                <button id="ppm-cancel" class="btn btn-outline" style="flex: 1;">
+                    ✕ Cancel
+                </button>
+                <button id="ppm-confirm" class="btn btn-primary" style="flex: 2; font-weight: 700;">
+                    ${confirmLabel}
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Close / cancel
+    const closeModal = () => {
+        URL.revokeObjectURL(objectUrl);
+        modal.remove();
+    };
+    document.getElementById('ppm-close').onclick   = closeModal;
+    document.getElementById('ppm-cancel').onclick  = closeModal;
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    // Re-select a different photo
+    document.getElementById('ppm-reselect').addEventListener('change', function () {
+        const newFile = this.files[0];
+        if (!newFile) return;
+        URL.revokeObjectURL(objectUrl);
+        modal.remove();
+        // Re-open preview with the new file, same callbacks
+        showPhotoPreviewModal({ file: newFile, title, subtitle, confirmLabel, onConfirm });
+    });
+
+    // Confirm upload
+    const confirmBtn = document.getElementById('ppm-confirm');
+    confirmBtn.onclick = async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Uploading...';
+        await onConfirm();
+        closeModal();
+    };
+}
+
+// ── Toast helper ──────────────────────────────────────────────
+function showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+        background: ${type === 'success' ? '#22c55e' : '#ef4444'};
+        color: #fff; padding: 12px 24px; border-radius: 8px; font-weight: 600;
+        font-size: 0.88rem; z-index: 9999; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+        animation: fadeInUp 0.3s ease;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+}

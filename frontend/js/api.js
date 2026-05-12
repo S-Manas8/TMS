@@ -173,7 +173,64 @@ async function awardShipment(shipmentId, bidId = null) {
     });
 }
 
-// ---------- UI helpers ----------
+// ---------- POD & Proof Requests ----------
+
+async function uploadDeliveryPhoto(shipmentId, destId, photoFile, notes = "") {
+    const formData = new FormData();
+    formData.append("photo", photoFile);
+    formData.append("notes", notes);
+    const res = await fetch(`/api/pod/${shipmentId}/destinations/${destId}/upload`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${getToken()}` },
+        body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Upload failed");
+    return data;
+}
+
+async function getShipmentPhotos(shipmentId) {
+    return apiFetch(`/api/pod/${shipmentId}/photos`);
+}
+
+async function requestProofPhoto(shipmentId) {
+    return apiFetch(`/api/pod/${shipmentId}/proof-request`, { method: "POST" });
+}
+
+async function getProofRequests(shipmentId) {
+    return apiFetch(`/api/pod/${shipmentId}/proof-requests`);
+}
+
+async function fulfillProofRequest(shipmentId, requestId, photoFile) {
+    const formData = new FormData();
+    formData.append("photo", photoFile);
+    const res = await fetch(`/api/pod/${shipmentId}/proof-request/${requestId}/fulfill`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${getToken()}` },
+        body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Upload failed");
+    return data;
+}
+
+async function acknowledgePodPhoto(shipmentId, podId, action, notes = "") {
+    return apiFetch(`/api/pod/${shipmentId}/photos/${podId}/acknowledge`, {
+        method: "POST",
+        body: { action, notes }
+    });
+}
+
+async function raiseComplaint(shipmentId, reason, description = "") {
+    return apiFetch(`/api/pod/${shipmentId}/complaint`, {
+        method: "POST",
+        body: { reason, description }
+    });
+}
+
+async function getComplaints(shipmentId) {
+    return apiFetch(`/api/pod/${shipmentId}/complaints`);
+}
 
 function fmt(amount) {
     return "₹" + Number(amount).toLocaleString("en-IN");

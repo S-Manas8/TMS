@@ -93,11 +93,44 @@ class POD(Base):
 
     id           = Column(TEXT, primary_key=True, default=gen_id)
     shipment_id  = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    dest_id      = Column(TEXT, ForeignKey("shipment_destinations.id"), nullable=True)
     image_url    = Column(String)
     geo_lat      = Column(Float)
     geo_lng      = Column(Float)
     delivered_at = Column(DateTime, default=datetime.datetime.utcnow)
     notes        = Column(String)
+    pod_type     = Column(String, default="delivery")  # "delivery" or "proof_request"
+    
+    # Shipper acknowledgement flow
+    ack_status   = Column(String, default="pending")  # pending / approved / rejected
+    ack_notes    = Column(String, nullable=True)      # shipper's feedback on rejection
+    ack_at       = Column(DateTime, nullable=True)    # when shipper acknowledged
+
+
+class Complaint(Base):
+    __tablename__ = "complaints"
+
+    id          = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    shipper_id  = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    driver_id   = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    reason      = Column(String, nullable=False)
+    description = Column(TEXT, nullable=True)
+    status      = Column(String, default="open")  # open / resolved / dismissed
+    created_at  = Column(DateTime, default=datetime.datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class ProofRequest(Base):
+    __tablename__ = "proof_requests"
+
+    id          = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    shipper_id  = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    status      = Column(String, default="pending")   # pending / fulfilled
+    image_url   = Column(String, nullable=True)
+    created_at  = Column(DateTime, default=datetime.datetime.utcnow)
+    fulfilled_at = Column(DateTime, nullable=True)
 
 
 class Rating(Base):
