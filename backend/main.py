@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from sqlalchemy import text
 from database import engine, Base
-from routers import auth, shipments, bids, tracking, drivers, pod
+from routers import auth, shipments, bids, tracking, drivers, pod, payments
 
 # Perform safe schema migrations (Option 1: keep data)
 with engine.begin() as conn:
@@ -91,6 +91,70 @@ with engine.begin() as conn:
         """))
     except Exception:
         pass
+    try:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT PRIMARY KEY,
+                shipment_id TEXT NOT NULL,
+                shipper_id TEXT NOT NULL,
+                driver_id TEXT NOT NULL,
+                amount FLOAT NOT NULL,
+                currency TEXT DEFAULT 'inr',
+                stripe_pi_id TEXT,
+                stripe_pm_id TEXT,
+                stripe_charge_id TEXT,
+                status TEXT DEFAULT 'pending',
+                card_last4 TEXT,
+                card_brand TEXT,
+                created_at DATETIME,
+                paid_at DATETIME
+            )
+        """))
+    except Exception:
+        pass
+    # Ensure payments table has the correct columns (migrate if old schema)
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN shipper_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN driver_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN stripe_pi_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN stripe_pm_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN stripe_charge_id TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN card_last4 TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN card_brand TEXT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN paid_at DATETIME"))
+    except Exception:
+        pass
+
+# Fix old 'succeeded' payments on non-delivered shipments → escrow_held
+with engine.begin() as conn:
+    conn.execute(text("""
+        UPDATE payments SET status = 'escrow_held'
+        WHERE status = 'succeeded'
+        AND shipment_id IN (
+            SELECT id FROM shipments WHERE status NOT IN ('delivered')
+        )
+    """))
 
 # Create all database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -117,6 +181,7 @@ app.include_router(bids.router,      prefix="/api/shipments",  tags=["Bids"])
 app.include_router(tracking.router,  prefix="/api/track",     tags=["Tracking"])
 app.include_router(drivers.router,   prefix="/api/drivers",   tags=["Drivers"])
 app.include_router(pod.router,       prefix="/api/pod",       tags=["POD"])
+app.include_router(payments.router,  prefix="/api/payments",  tags=["Payments"])
 
 
 @app.get("/api/health")

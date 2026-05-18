@@ -256,7 +256,7 @@ def get_proof_requests(
     authorization: str = Header(None)
 ):
     """Get all proof requests for a shipment (shipper & driver)."""
-    user = get_current_user(authorization)
+    user = get_current_user(authorization) 
 
     s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not s:

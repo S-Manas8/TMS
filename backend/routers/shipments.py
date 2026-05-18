@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Shipment, User, Bid, Rating, ShipmentDestination
+from models import Shipment, User, Bid, Rating, ShipmentDestination, Payment
 from auth_utils import get_current_user
 import datetime
 import math
@@ -15,6 +15,16 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
+
+def _release_escrow(shipment_id: str, db: Session):
+    """Mark escrow payment as released to driver after delivery."""
+    payment = db.query(Payment).filter(
+        Payment.shipment_id == shipment_id,
+        Payment.status == "escrow_held"
+    ).first()
+    if payment:
+        payment.status = "released_to_driver"
+        db.commit()
 
 router = APIRouter()
 
@@ -191,6 +201,7 @@ def get_my_bids(
         db.query(Bid, Shipment)
         .join(Shipment, Shipment.id == Bid.shipment_id)
         .filter(Bid.driver_id == user["sub"])
+        .filter(Shipment.status != "cancelled")   # hide cancelled shipments from driver
         .order_by(Bid.created_at.desc())
         .all()
     )
@@ -373,6 +384,9 @@ def update_status(
         s.delivered_at = datetime.datetime.utcnow()
 
     db.commit()
+    # Auto-release escrow when driver marks delivered directly
+    if data["status"] == "delivered":
+        _release_escrow(shipment_id, db)
 
     return {"message": f"Status updated to {data['status']}"}
 
@@ -524,6 +538,8 @@ def update_destination_status(
             s.status = "delivered"
             s.delivered_at = datetime.datetime.utcnow()
             db.commit()
+            # Auto-release escrow to driver
+            _release_escrow(shipment_id, db)
 
     elif data.get("status") == "pending":
         dest.status = "pending"
@@ -531,6 +547,36 @@ def update_destination_status(
         db.commit()
 
     return {"message": "Destination updated"}
+
+
+@router.post("/{shipment_id}/cancel")
+def cancel_shipment(
+    shipment_id: str,
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """
+    Shipper cancels an open shipment.
+    Only allowed when status is 'open' (not yet assigned to a driver).
+    Deletes all bids so drivers no longer see it in their bid history.
+    """
+    user = get_current_user(authorization)
+    if user["role"] != "shipper":
+        raise HTTPException(403, "Only shippers can cancel shipments")
+
+    s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not s:
+        raise HTTPException(404, "Shipment not found")
+    if s.shipper_id != user["sub"]:
+        raise HTTPException(403, "You don't own this shipment")
+    if s.status != "open":
+        raise HTTPException(400, f"Cannot cancel a shipment with status '{s.status}'. Only open shipments can be cancelled.")
+
+    # Mark as cancelled
+    s.status = "cancelled"
+    db.commit()
+
+    return {"message": "Shipment cancelled successfully"}
 
 
 @router.post("/{shipment_id}/abandon")

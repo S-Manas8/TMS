@@ -3,8 +3,6 @@ from sqlalchemy.dialects.sqlite import TEXT
 from database import Base
 import uuid
 import datetime
-
-
 def gen_id():
     return str(uuid.uuid4())
 
@@ -133,6 +131,25 @@ class ProofRequest(Base):
     fulfilled_at = Column(DateTime, nullable=True)
 
 
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id                 = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id        = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    shipper_id         = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    driver_id          = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    amount             = Column(Float, nullable=False)          # in INR (rupees)
+    currency           = Column(String, default="inr")
+    stripe_pi_id       = Column(String, nullable=True)          # payment_intent id
+    stripe_pm_id       = Column(String, nullable=True)          # payment_method id
+    stripe_charge_id   = Column(String, nullable=True)          # charge id
+    status             = Column(String, default="pending")      # pending / succeeded / failed
+    card_last4         = Column(String, nullable=True)
+    card_brand         = Column(String, nullable=True)
+    created_at         = Column(DateTime, default=datetime.datetime.utcnow)
+    paid_at            = Column(DateTime, nullable=True)
+
+
 class Rating(Base):
     __tablename__ = "ratings"
 
@@ -142,3 +159,5 @@ class Rating(Base):
     shipper_id  = Column(TEXT, ForeignKey("users.id"), nullable=False)
     score       = Column(Float, nullable=False)  # 1 to 5
     created_at  = Column(DateTime, default=datetime.datetime.utcnow)
+       
+
