@@ -12,6 +12,19 @@ let selectedLoad = null;
 let openLoads    = [];
 let myBidsMap    = {};   // shipment_id → amount
 
+// ── Tab switching ─────────────────────────────────────────────
+function switchTab(tab) {
+    ['loads','bids','trips','rating'].forEach(t => {
+        document.getElementById('tabn-' + t).classList.toggle('active', t === tab);
+        document.getElementById('pane-' + t).classList.toggle('active', t === tab);
+    });
+    // Refresh data when switching tabs so cancelled/updated items appear immediately
+    if (tab === 'loads') loadOpenLoads();
+    if (tab === 'bids')  loadMyActiveBids();
+    // Invalidate map when trips tab becomes visible
+    if (tab === 'trips' && driverMap) setTimeout(() => driverMap.invalidateSize(), 50);
+}
+
 // ── Open Loads ────────────────────────────────────────────────
 async function loadOpenLoads() {
     const container = document.getElementById('open-loads-list');
@@ -28,20 +41,24 @@ async function loadOpenLoads() {
             const dest = s.destinations && s.destinations.length > 0
                 ? (s.destinations.length > 1 ? s.destinations.length + ' Stops' : s.destinations[0].address)
                 : (s.drop_address || 'N/A');
-            return `<div class="load-card card" style="margin-bottom:10px;padding:16px"
-                         id="lcard-${s.id}" onclick="selectLoad('${s.id}')">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div style="font-weight:700;font-size:0.95rem">${s.pickup_address} → ${dest}</div>
-                    ${myBidsMap[s.id] ? `<span class="already-bid-badge">Bid: ${fmt(myBidsMap[s.id])}</span>` : ''}
+            const hasBid = !!myBidsMap[s.id];
+            return `<div class="load-card" id="lcard-${s.id}" onclick="selectLoad('${s.id}')">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+                    <div style="flex:1;min-width:0;margin-right:10px;">
+                        <div style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.pickup_address}</div>
+                        <div style="font-size:0.78rem;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">→ ${dest}</div>
+                    </div>
+                    ${hasBid ? `<span class="already-bid-badge">✓ ${fmt(myBidsMap[s.id])}</span>` : ''}
                 </div>
-                <div class="meta-row" style="gap:16px">
-                    <div class="meta-item"><span class="meta-label">Goods</span><span class="meta-value" style="font-size:0.85rem">${s.goods_desc}</span></div>
-                    <div class="meta-item"><span class="meta-label">Weight</span><span class="meta-value">${s.weight_kg} kg</span></div>
-                    <div class="meta-item"><span class="meta-label">Vehicle</span><span class="meta-value">${s.vehicle_type}</span></div>
-                    ${s.est_time_hours ? `<div class="meta-item"><span class="meta-label">Est. Time</span><span class="meta-value">${s.est_time_hours}h</span></div>` : ''}
-                    ${s.bid_count > 0 ? `<div class="meta-item"><span class="meta-label">Bids</span><span class="meta-value accent">${s.bid_count}</span></div>` : ''}
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                    <span style="font-size:0.75rem;color:var(--muted);">📦 ${s.goods_desc}</span>
+                    <span style="font-size:0.75rem;color:var(--muted);">⚖️ ${s.weight_kg} kg</span>
+                    <span style="font-size:0.75rem;color:var(--muted);">🚛 ${s.vehicle_type}</span>
+                    ${s.est_time_hours ? `<span style="font-size:0.75rem;color:var(--muted);">⏱ ${s.est_time_hours}h</span>` : ''}
+                    ${s.bid_count > 0 ? `<span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--accent);background:rgba(245,158,11,0.1);padding:1px 7px;border-radius:10px;">${s.bid_count} bid${s.bid_count!==1?'s':''}</span>` : ''}
+                    <span style="font-size:0.7rem;color:var(--muted);margin-left:auto;">${timeAgo(s.created_at)}</span>
                 </div>
-                ${s.deadline ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:6px;font-family:var(--font-mono)">Deadline: ${new Date(s.deadline).toLocaleString()}</div>` : ''}
+                ${s.deadline ? `<div style="font-size:0.7rem;color:#f59e0b;margin-top:5px;font-family:var(--font-mono);">⏰ Deadline: ${new Date(s.deadline).toLocaleString()}</div>` : ''}
             </div>`;
         }).join('');
     } catch (err) {
@@ -179,6 +196,12 @@ async function loadMyActiveBids() {
 
         document.getElementById('stat-mybids').textContent = bids.length;
 
+        // Update bids tab badge
+        const activeBids = bids.filter(b => b.shipment_status === 'open').length;
+        const bidBadge = document.getElementById('badge-bids');
+        if (activeBids > 0) { bidBadge.textContent = activeBids; bidBadge.style.display = ''; }
+        else bidBadge.style.display = 'none';
+
         if (!bids.length) {
             container.innerHTML = '<div class="empty-state" style="padding:20px 0;"><div class="icon">🎯</div><p style="font-size:0.85rem;">No bids placed yet.</p></div>';
             return;
@@ -195,6 +218,8 @@ async function loadMyActiveBids() {
             let label, color;
             if (b.shipment_status === 'open') {
                 label = '⏳ Awaiting Award'; color = '#f59e0b';
+            } else if (b.shipment_status === 'cancelled') {
+                label = '🚫 Cancelled by Shipper'; color = '#6b7280';
             } else if (b.was_abandoned) {
                 label = '⚠️ Abandoned'; color = '#f59e0b';
             } else if (b.is_winner) {
@@ -204,17 +229,24 @@ async function loadMyActiveBids() {
                 label = '❌ Not Selected'; color = '#6b7280';
             }
 
-            const border = b.was_abandoned ? '#f59e0b'
+            const border = b.shipment_status === 'cancelled' ? 'rgba(100,100,100,0.25)'
+                : b.was_abandoned ? '#f59e0b'
                 : b.is_winner ? 'var(--green)'
                 : b.shipment_status === 'open' && b.is_lowest ? 'var(--green)'
                 : 'var(--border)';
 
-            return `<div style="padding:14px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;border-left:3px solid ${border};">
+            const isCancelled = b.shipment_status === 'cancelled';
+
+            return `<div style="padding:14px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;border-left:3px solid ${border};${isCancelled ? 'opacity:0.55;' : ''}">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
                     <div style="font-weight:700;font-size:0.88rem;flex:1;margin-right:8px;">${b.pickup_address} → ${b.drop_address || 'N/A'}</div>
                     <span style="font-size:0.72rem;color:${color};font-family:var(--font-mono);white-space:nowrap;font-weight:600;">${label}</span>
                 </div>
                 <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">${b.goods_desc} · ${b.weight_kg} kg · ${b.vehicle_type}</div>
+                ${isCancelled ? `
+                <div style="font-size:0.75rem;color:#6b7280;padding:6px 10px;background:rgba(100,100,100,0.08);border-radius:6px;">
+                    This load was cancelled by the shipper. Your bid has been voided.
+                </div>` : `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
                         <div style="font-size:0.68rem;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.05em;">Your Bid</div>
@@ -229,7 +261,7 @@ async function loadMyActiveBids() {
                         <div style="font-size:0.68rem;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.05em;">Awarded At</div>
                         <div style="font-size:0.82rem;font-weight:600;">${fmt(b.winning_bid_amount)}</div>
                     </div>` : ''}
-                </div>
+                </div>`}
                 <div style="font-size:0.7rem;color:var(--muted);margin-top:8px;font-family:var(--font-mono);">Placed ${timeAgo(b.placed_at)}</div>
             </div>`;
         }).join('');
@@ -249,6 +281,11 @@ async function loadMyTrips() {
         document.getElementById('stat-active').textContent = active;
         document.getElementById('stat-done').textContent   = completed;
 
+        // Update trips tab badge
+        const tripBadge = document.getElementById('badge-trips');
+        if (active > 0) { tripBadge.textContent = active; tripBadge.style.display = ''; }
+        else tripBadge.style.display = 'none';
+
         if (!trips.length) {
             container.innerHTML = '<div class="empty-state"><div class="icon">🏁</div><p>No assigned trips yet.</p></div>';
             document.getElementById('trip-map').style.display = 'none';
@@ -266,14 +303,20 @@ async function loadMyTrips() {
             stopProofRequestPolling();
         }
 
-        // Remember which photo sections are currently open so we can restore after re-render
+        // Remember open accordion sections
         const openSections = new Set(
             [...document.querySelectorAll('[id^="photo-section-"]')]
                 .filter(el => el.style.display !== 'none')
                 .map(el => el.id)
         );
+        // Remember open trip accordions
+        const openTrips = new Set(
+            [...document.querySelectorAll('[id^="trip-body-"]')]
+                .filter(el => el.style.display !== 'none')
+                .map(el => el.id.replace('trip-body-', ''))
+        );
 
-        // Fetch pending proof requests for in-transit trips so we can render inline
+        // Fetch proof requests for in-transit trips
         const proofMap = {};
         for (const t of trips.filter(t => t.status === 'in_transit')) {
             try {
@@ -283,32 +326,83 @@ async function loadMyTrips() {
             } catch (e) { proofMap[t.id] = null; }
         }
 
-        // Fetch uploaded photos for in_transit and delivered trips
+        // Fetch photos for in_transit and delivered trips
         const photosMap = {};
         for (const t of trips.filter(t => ['in_transit','delivered'].includes(t.status))) {
-            try {
-                photosMap[t.id] = await getShipmentPhotos(t.id);
-            } catch (e) { photosMap[t.id] = []; }
+            try { photosMap[t.id] = await getShipmentPhotos(t.id); }
+            catch (e) { photosMap[t.id] = []; }
         }
+
+        // Fetch payment status
+        const paymentMap = {};
+        for (const t of trips.filter(t => ['assigned','in_transit','delivered'].includes(t.status))) {
+            try { paymentMap[t.id] = await getPaymentStatus(t.id); }
+            catch (e) {
+                console.warn('Payment fetch failed for', t.id, e.message);
+                paymentMap[t.id] = null;
+            }
+        }
+
+        // Determine which trips should be auto-expanded
+        // Active trips always open; delivered trips open only if previously open
+        const shouldOpen = id => {
+            const t = trips.find(x => x.id === id);
+            return t && ['assigned','in_transit'].includes(t.status) || openTrips.has(id);
+        };
 
         container.innerHTML = trips.map(t => {
             const dest = t.destinations && t.destinations.length > 0
                 ? (t.destinations.length > 1 ? t.destinations.length + ' Stops' : t.destinations[0].address)
                 : (t.drop_address || 'N/A');
-            return `<div class="card my-trip-card fade-in" style="margin-bottom:12px;padding:16px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div style="font-weight:700">${t.pickup_address} → ${dest}</div>
-                    ${statusBadge(t.status)}
+
+            const pillClass = { assigned:'pill-assigned', in_transit:'pill-transit', delivered:'pill-delivered' };
+            const pillIcon  = { assigned:'🔵', in_transit:'🟠', delivered:'🟢' };
+            const isOpen    = shouldOpen(t.id);
+
+            // Payment badge for header
+            const pay = paymentMap[t.id];
+            let payBadge = '';
+            if (pay && pay.status === 'released_to_driver') {
+                payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:var(--green);background:rgba(16,185,129,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">✅ Paid</span>`;
+            } else if (pay && (pay.status === 'escrow_held' || pay.status === 'succeeded')) {
+                payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:#60a5fa;background:rgba(59,130,246,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">🔒 Secured</span>`;
+            } else if (t.status === 'delivered' && (!pay || pay.status === 'not_initiated')) {
+                payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:#f59e0b;background:rgba(245,158,11,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">⏳ Unpaid</span>`;
+            }
+
+            return `
+            <div class="trip-card" id="trip-card-${t.id}">
+                <!-- Accordion header -->
+                <div class="trip-card-header" onclick="toggleTripCard('${t.id}')">
+                    <div style="flex:1;min-width:0;">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                            <span class="pill ${pillClass[t.status] || 'pill-assigned'}">${pillIcon[t.status] || '⚪'} ${t.status.replace('_',' ')}</span>
+                            ${t.winning_bid_amount ? `<span style="font-family:var(--font-cond);font-weight:700;font-size:0.95rem;color:var(--accent);">${fmt(t.winning_bid_amount)}</span>` : ''}
+                            ${payBadge}
+                        </div>
+                        <div style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.pickup_address} → ${dest}</div>
+                        <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">📦 ${t.goods_desc} · ⚖️ ${t.weight_kg} kg · 🚛 ${t.vehicle_type}</div>
+                    </div>
+                    <span id="trip-arrow-${t.id}" style="font-size:0.8rem;color:var(--muted);margin-left:12px;flex-shrink:0;transition:transform 0.2s;${isOpen ? 'transform:rotate(180deg)' : ''}">▼</span>
                 </div>
-                <div class="meta-row" style="gap:16px;margin-bottom:0">
-                    <div class="meta-item"><span class="meta-label">Goods</span><span class="meta-value" style="font-size:0.85rem">${t.goods_desc}</span></div>
-                    ${t.winning_bid_amount ? `<div class="meta-item"><span class="meta-label">Earned</span><span class="meta-value green">${fmt(t.winning_bid_amount)}</span></div>` : ''}
-                    ${t.est_time_hours ? `<div class="meta-item"><span class="meta-label">Approx Time</span><span class="meta-value">${t.est_time_hours}h</span></div>` : ''}
-                    ${t.status === 'delivered' && t.started_at && t.delivered_at ? `<div class="meta-item"><span class="meta-label">Time Taken</span><span class="meta-value green">${calculateTimeTaken(t.started_at, t.delivered_at)}</span></div>` : ''}
+
+                <!-- Accordion body -->
+                <div id="trip-body-${t.id}" style="${isOpen ? '' : 'display:none;'}">
+                    <!-- Meta strip -->
+                    <div style="padding:10px 16px;background:rgba(0,0,0,0.15);border-bottom:1px solid var(--border);display:flex;gap:16px;flex-wrap:wrap;">
+                        ${t.est_time_hours ? `<span style="font-size:0.75rem;color:var(--muted);">⏱ Est. ${t.est_time_hours}h</span>` : ''}
+                        ${t.status === 'delivered' && t.started_at && t.delivered_at ? `<span style="font-size:0.75rem;color:var(--green);">✅ Took ${calculateTimeTaken(t.started_at, t.delivered_at)}</span>` : ''}
+                        ${t.deadline ? `<span style="font-size:0.75rem;color:#f59e0b;">⏰ ${new Date(t.deadline).toLocaleDateString()}</span>` : ''}
+                        <span style="font-size:0.72rem;color:var(--muted);margin-left:auto;">${timeAgo(t.created_at)}</span>
+                    </div>
+
+                    <div style="padding:14px 16px;">
+                        ${renderPaymentSection(t, paymentMap[t.id])}
+                        ${renderProofRequestInline(t, proofMap[t.id])}
+                        ${renderTripButtons(t)}
+                        ${renderDriverPhotoHistory(t, photosMap[t.id] || [])}
+                    </div>
                 </div>
-                ${renderProofRequestInline(t, proofMap[t.id])}
-                ${renderTripButtons(t)}
-                ${renderDriverPhotoHistory(t, photosMap[t.id] || [])}
             </div>`;
         }).join('');
 
@@ -323,6 +417,148 @@ async function loadMyTrips() {
     } catch (err) {
         container.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
     }
+}
+
+function toggleTripCard(id) {
+    const body  = document.getElementById('trip-body-' + id);
+    const arrow = document.getElementById('trip-arrow-' + id);
+    if (!body) return;
+    const isOpen = body.style.display !== 'none';
+    body.style.display    = isOpen ? 'none' : '';
+    arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+// ── Payment section inside trip card (driver view) ───────────
+function renderPaymentSection(trip, pay) {
+    // Only show for trips that have been awarded
+    if (!['assigned', 'in_transit', 'delivered'].includes(trip.status)) return '';
+    if (!trip.winning_bid_amount) return '';
+
+    // No payment record yet
+    if (!pay || pay.status === 'not_initiated') {
+        // Only show "awaiting payment" for delivered trips — during transit it's expected
+        if (trip.status !== 'delivered') return '';
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:rgba(245,158,11,0.08);
+                        border:1px solid rgba(245,158,11,0.25);
+                        border-radius:8px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:1.1rem;">⏳</span>
+                    <div style="font-weight:700;font-size:0.88rem;color:#f59e0b;">Payment Not Received Yet</div>
+                </div>
+                <div style="font-size:0.78rem;color:var(--muted);">
+                    Trip completed · Awaiting payment of
+                    <strong style="color:var(--accent);">${fmt(trip.winning_bid_amount)}</strong>
+                    from shipper
+                </div>
+            </div>`;
+    }
+
+    if (pay.status === 'pending') {
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:rgba(245,158,11,0.08);
+                        border:1px solid rgba(245,158,11,0.25);
+                        border-radius:8px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:1.1rem;">⏳</span>
+                    <div style="font-weight:700;font-size:0.88rem;color:#f59e0b;">Payment Pending</div>
+                </div>
+                <div style="font-size:0.78rem;color:var(--muted);">
+                    <strong style="color:var(--accent);">${fmt(pay.amount)}</strong>
+                    — Shipper has initiated payment, processing...
+                </div>
+                ${pay.shipper_name ? `
+                <div style="margin-top:6px;font-size:0.75rem;color:var(--muted);">
+                    👤 Shipper: <strong style="color:var(--text);">${pay.shipper_name}</strong>
+                    ${pay.shipper_phone ? `· <a href="tel:${pay.shipper_phone}" style="color:var(--accent);">${pay.shipper_phone}</a>` : ''}
+                </div>` : ''}
+            </div>`;
+    }
+
+    if (pay.status === 'succeeded' || pay.status === 'escrow_held' || pay.status === 'released_to_driver') {
+        const paidDate = pay.paid_at
+            ? new Date(pay.paid_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })
+            : '—';
+        const paidTime = pay.paid_at
+            ? new Date(pay.paid_at).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' })
+            : '';
+
+        // succeeded and escrow_held = shipper paid, funds held, driver hasn't delivered yet
+        // released_to_driver = delivery confirmed, driver gets the money
+        const isReleased = pay.status === 'released_to_driver';
+
+        const titleStr  = isReleased ? "Payment Released to You"       : "Payment Secured by FreightBid";
+        const iconStr   = isReleased ? "✅"                             : "🔒";
+        const noteStr   = isReleased ? "Delivery confirmed · Funds released to your account"
+                                     : "Shipper paid · Held by FreightBid · Released after delivery";
+        const bgColor   = isReleased ? "rgba(16,185,129,0.08)"         : "rgba(59,130,246,0.08)";
+        const bdColor   = isReleased ? "rgba(16,185,129,0.25)"         : "rgba(59,130,246,0.3)";
+        const txtColor  = isReleased ? "var(--green)"                  : "#60a5fa";
+
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:${bgColor};
+                        border:1px solid ${bdColor};
+                        border-radius:8px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:1.2rem;">${iconStr}</span>
+                        <div style="font-weight:700;font-size:0.9rem;color:${txtColor};">${titleStr}</div>
+                    </div>
+                    <div style="font-family:var(--font-cond);font-size:1.1rem;font-weight:700;color:${txtColor};">
+                        ${fmt(pay.amount)}
+                    </div>
+                </div>
+                <div style="font-size:0.72rem;color:var(--muted);margin-bottom:10px;">${noteStr}</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.75rem;">
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);margin-bottom:2px;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;">Paid On</div>
+                        <div style="font-weight:600;">${paidDate}</div>
+                        <div style="color:var(--muted);font-size:0.7rem;">${paidTime}</div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);margin-bottom:2px;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;">Payment Method</div>
+                        <div style="font-weight:600;text-transform:capitalize;">
+                            ${pay.card_brand || 'Card'}
+                            ${pay.card_last4 ? `<span style="font-family:var(--font-mono);"> ****${pay.card_last4}</span>` : ''}
+                        </div>
+                    </div>
+                    ${pay.shipper_name ? `
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);margin-bottom:2px;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;">Paid By (Shipper)</div>
+                        <div style="font-weight:600;">${pay.shipper_name}</div>
+                        ${pay.shipper_phone ? `<div style="color:var(--muted);font-size:0.7rem;">${pay.shipper_phone}</div>` : ''}
+                    </div>` : ''}
+                    ${pay.charge_id ? `
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);margin-bottom:2px;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;">Transaction ID</div>
+                        <div style="font-family:var(--font-mono);font-size:0.68rem;word-break:break-all;color:var(--muted);">${pay.charge_id}</div>
+                    </div>` : ''}
+                </div>
+            </div>`;
+    }
+
+    if (pay.status === 'failed') {
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:rgba(239,68,68,0.08);
+                        border:1px solid rgba(239,68,68,0.25);
+                        border-radius:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:1.1rem;">❌</span>
+                    <div>
+                        <div style="font-weight:700;font-size:0.88rem;color:#ef4444;">Payment Failed</div>
+                        <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                            Shipper's payment attempt failed. Amount: <strong>${fmt(pay.amount)}</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    return '';
 }
 
 // ── Inline proof request block inside trip card ───────────────

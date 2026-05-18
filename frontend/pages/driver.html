@@ -8,132 +8,305 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        .load-card { cursor:pointer; transition:border-color 0.2s; }
-        .load-card:hover { border-color:var(--accent); }
-        .load-card.selected { border-color:var(--accent); background:var(--surface2); }
+        /* ── Stats bar ───────────────────────────────────────── */
+        .stats-bar {
+            display: flex; gap: 10px; flex-wrap: wrap;
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0,0,0,0.15);
+        }
+        .stat-chip {
+            display: flex; align-items: center; gap: 8px;
+            padding: 5px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 0.82rem;
+        }
+        .stat-chip-num { font-family:var(--font-cond); font-weight:700; font-size:1rem; color:var(--accent); }
+        .stat-chip-label { color:var(--muted); font-size:0.75rem; }
+
+        /* ── Tab nav ─────────────────────────────────────────── */
+        .tab-nav {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0,0,0,0.2);
+            padding: 0 24px;
+            gap: 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .tab-nav::-webkit-scrollbar { display: none; }
+        .tab-btn {
+            padding: 13px 20px;
+            font-family: var(--font-cond);
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-badge {
+            font-size: 0.65rem; font-family: var(--font-mono);
+            background: rgba(245,158,11,0.2); color: var(--accent);
+            padding: 1px 6px; border-radius: 10px; font-weight: 700;
+        }
+
+        /* ── Tab panes ───────────────────────────────────────── */
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+
+        /* ── Page layout ─────────────────────────────────────── */
+        .page-body { max-width: 1200px; margin: 0 auto; padding: 20px 24px; }
+
+        /* ── Load cards ──────────────────────────────────────── */
+        .load-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            cursor: pointer;
+            transition: border-color 0.18s, transform 0.15s;
+            margin-bottom: 8px;
+        }
+        .load-card:hover { border-color: rgba(245,158,11,0.4); transform: translateX(2px); }
+        .load-card.selected { border-color: var(--accent); background: rgba(245,158,11,0.05); border-left: 3px solid var(--accent); }
+
+        /* ── Bid panel ───────────────────────────────────────── */
         .bid-input-row { display:flex; gap:10px; align-items:flex-end; }
         .bid-input-row input { flex:1; }
-        .my-trip-card { border-left:3px solid var(--accent); }
-        .trip-status-btns { display:flex; gap:10px; margin-top:12px; }
-        .already-bid-badge { font-size:0.72rem; font-family:var(--font-mono); color:var(--blue); background:rgba(59,130,246,0.12); padding:2px 8px; border-radius:4px; }
+        .already-bid-badge {
+            font-size:0.7rem; font-family:var(--font-mono);
+            color:var(--blue); background:rgba(59,130,246,0.12);
+            padding:2px 8px; border-radius:4px;
+        }
+
+        /* ── Trip cards ──────────────────────────────────────── */
+        .trip-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .trip-card-header {
+            padding: 14px 16px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .trip-card-header:hover { background: rgba(255,255,255,0.02); }
+        .trip-card-body {
+            border-top: 1px solid var(--border);
+            padding: 14px 16px;
+        }
+
+        /* ── Status pills ────────────────────────────────────── */
+        .pill {
+            display: inline-flex; align-items: center; gap: 4px;
+            font-size: 0.68rem; font-family: var(--font-mono);
+            font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+            padding: 2px 8px; border-radius: 20px;
+        }
+        .pill-open      { background:rgba(245,158,11,0.15); color:#f59e0b; }
+        .pill-assigned  { background:rgba(59,130,246,0.15); color:#3b82f6; }
+        .pill-transit   { background:rgba(251,146,60,0.15); color:#fb923c; }
+        .pill-delivered { background:rgba(16,185,129,0.15); color:#10b981; }
+
+        /* ── Two-col layout for find loads ──────────────────── */
+        .loads-layout {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 20px;
+            align-items: start;
+        }
+        @media (max-width: 860px) {
+            .loads-layout { grid-template-columns: 1fr; }
+        }
+
+        /* ── Bid detail sticky ───────────────────────────────── */
+        .bid-detail-sticky {
+            position: sticky;
+            top: 72px;
+        }
+
+        /* ── Section header ──────────────────────────────────── */
+        .sec-hdr {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 12px;
+        }
+        .sec-title {
+            font-family: var(--font-cond); font-weight: 700;
+            font-size: 0.8rem; text-transform: uppercase;
+            letter-spacing: 0.07em; color: var(--muted);
+        }
+        .refresh-btn {
+            font-family: var(--font-mono); font-size: 0.72rem;
+            color: var(--muted); background: none; border: none;
+            cursor: pointer; padding: 3px 7px; border-radius: 4px;
+            transition: color 0.15s, background 0.15s;
+        }
+        .refresh-btn:hover { color: var(--accent); background: rgba(245,158,11,0.08); }
+
+        /* ── Map ─────────────────────────────────────────────── */
+        #trip-map {
+            height: 220px; width: 100%; border-radius: 8px;
+            margin-bottom: 12px; display: none;
+            border: 1px solid var(--border);
+        }
     </style>
 </head>
 <body>
 
-    <nav class="nav">
-        <a class="nav-logo" href="/">Freight<span>Bid</span></a>
-        <div class="nav-right">
-            <span class="nav-user" id="nav-name">...</span>
-            <span style="color:var(--border)">|</span>
-            <span style="color:var(--blue);font-size:0.75rem;font-family:var(--font-mono)">DRIVER</span>
-            <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
-        </div>
-    </nav>
+<!-- ── Nav ──────────────────────────────────────────────────── -->
+<nav class="nav">
+    <a class="nav-logo" href="/">Freight<span>Bid</span></a>
+    <div class="nav-right">
+        <span class="nav-user" id="nav-name">...</span>
+        <span style="color:var(--border)">|</span>
+        <span style="color:var(--blue);font-size:0.72rem;font-family:var(--font-mono);letter-spacing:0.08em;">DRIVER</span>
+        <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>
+</nav>
 
-    <div class="container">
+<!-- ── Stats Bar ─────────────────────────────────────────────── -->
+<div class="stats-bar">
+    <div class="stat-chip">
+        <span class="stat-chip-num" id="stat-open">—</span>
+        <span class="stat-chip-label">Open Loads</span>
+    </div>
+    <div class="stat-chip">
+        <span class="stat-chip-num" id="stat-mybids">—</span>
+        <span class="stat-chip-label">My Bids</span>
+    </div>
+    <div class="stat-chip">
+        <span class="stat-chip-num" id="stat-active">—</span>
+        <span class="stat-chip-label">Active</span>
+    </div>
+    <div class="stat-chip">
+        <span class="stat-chip-num" id="stat-done">—</span>
+        <span class="stat-chip-label">Completed</span>
+    </div>
+</div>
 
-        <!-- Stats Row -->
-        <div class="stats-row">
-            <div class="stat-box">
-                <div class="stat-number" id="stat-open">—</div>
-                <div class="stat-label">Open Loads</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-number" id="stat-mybids">—</div>
-                <div class="stat-label">My Bids</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-number" id="stat-active">—</div>
-                <div class="stat-label">Active Trips</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-number" id="stat-done">—</div>
-                <div class="stat-label">Completed</div>
-            </div>
-        </div>
+<!-- ── Tab Nav ───────────────────────────────────────────────── -->
+<div class="tab-nav">
+    <button class="tab-btn active" id="tabn-loads" onclick="switchTab('loads')">
+        🔍 Find Loads
+    </button>
+    <button class="tab-btn" id="tabn-bids" onclick="switchTab('bids')">
+        💰 My Bids <span class="tab-badge" id="badge-bids" style="display:none"></span>
+    </button>
+    <button class="tab-btn" id="tabn-trips" onclick="switchTab('trips')">
+        🚚 My Trips <span class="tab-badge" id="badge-trips" style="display:none"></span>
+    </button>
+    <button class="tab-btn" id="tabn-rating" onclick="switchTab('rating')">
+        ⭐ My Rating
+    </button>
+</div>
 
-        <div class="grid-2" style="gap:24px;align-items:start">
-
-            <!-- LEFT -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- TAB: Find Loads                                           -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="tab-pane active" id="pane-loads">
+    <div class="page-body">
+        <div class="loads-layout">
+            <!-- Load list -->
             <div>
-                <!-- My Rating -->
-                <div class="card" style="margin-bottom:0;">
-                    <div class="card-header">
-                        <div class="card-title">⭐ My Rating</div>
-                    </div>
-                    <div id="my-rating-box"><div class="loading">Loading...</div></div>
+                <div class="sec-hdr">
+                    <span class="sec-title">Available Loads</span>
+                    <button class="refresh-btn" onclick="loadOpenLoads()">↻ Refresh</button>
                 </div>
-
-                <!-- Available Loads -->
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title">Available Loads</div>
-                        <button class="refresh-btn" onclick="loadOpenLoads()">↻ Refresh</button>
-                    </div>
-                    <div id="open-loads-list"><div class="loading">Loading...</div></div>
-                </div>
+                <div id="open-loads-list"><div class="loading">Loading...</div></div>
             </div>
 
-            <!-- RIGHT -->
-            <div>
-                <!-- Bid Placeholder -->
-                <div class="card" id="bid-placeholder">
+            <!-- Bid detail panel -->
+            <div class="bid-detail-sticky">
+                <div id="bid-placeholder" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:48px 24px;">
                     <div class="empty-state">
                         <div class="icon">🚛</div>
-                        <p>Click a load on the left to place your bid.</p>
+                        <p>Click a load to view details and place your bid.</p>
                     </div>
                 </div>
-
-                <!-- Bid Detail Panel -->
-                <div class="card" id="bid-panel" style="display:none">
-                    <div class="card-header">
-                        <div class="card-title" id="bid-panel-title">Load Detail</div>
+                <div id="bid-panel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+                    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                        <div style="font-family:var(--font-cond);font-weight:700;font-size:1rem;" id="bid-panel-title">Load Detail</div>
                         <div id="bid-panel-status"></div>
                     </div>
-                    <div id="bid-panel-route" style="margin-bottom:12px"></div>
-                    <div id="bid-panel-meta" class="meta-row" style="margin-bottom:16px"></div>
-                    <hr class="divider">
-                    <div id="bid-panel-myBid" style="margin-bottom:12px"></div>
-                    <div id="bid-form">
-                        <div class="form-group" style="margin-bottom:0">
-                            <label>Your Bid Amount (₹)</label>
-                            <div class="bid-input-row">
-                                <input type="number" id="bid-amount" placeholder="e.g. 12000" min="1">
-                                <button class="btn btn-primary" onclick="doPlaceBid()" id="bid-btn">Place Bid</button>
+                    <div style="padding:14px 18px;">
+                        <div id="bid-panel-route" style="margin-bottom:12px;"></div>
+                        <div id="bid-panel-meta" class="meta-row" style="margin-bottom:14px;gap:14px;"></div>
+                        <hr class="divider">
+                        <div id="bid-panel-myBid" style="margin-bottom:10px;"></div>
+                        <div id="bid-form">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Your Bid Amount (₹)</label>
+                                <div class="bid-input-row">
+                                    <input type="number" id="bid-amount" placeholder="e.g. 12000" min="1">
+                                    <button class="btn btn-primary" onclick="doPlaceBid()" id="bid-btn">Place Bid</button>
+                                </div>
                             </div>
+                            <p style="font-size:0.72rem;color:var(--muted);margin-top:6px;">Lowest bid wins. You can update anytime.</p>
                         </div>
-                        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px">
-                            Lowest bid wins. You can update your bid at any time.
-                        </p>
+                        <div id="bid-alert" style="margin-top:10px;"></div>
                     </div>
-                    <div id="bid-alert" style="margin-top:12px"></div>
-                </div>
-
-                <!-- My Active Bids -->
-                <div class="card" style="margin-top:0">
-                    <div class="card-header">
-                        <div class="card-title">💰 My Active Bids</div>
-                        <button class="refresh-btn" onclick="loadMyActiveBids()">↻ Refresh</button>
-                    </div>
-                    <div id="my-bids-list"><div class="loading">Loading...</div></div>
-                </div>
-
-                <!-- My Trips -->
-                <div class="card" style="margin-top:0">
-                    <div class="card-header">
-                        <div class="card-title">My Trips</div>
-                        <button class="refresh-btn" onclick="loadMyTrips()">↻ Refresh</button>
-                    </div>
-                    <div id="trip-map" style="height:250px;width:100%;border-radius:8px;margin-bottom:12px;display:none;border:1px solid var(--border);"></div>
-                    <div id="my-trips-list"><div class="loading">Loading...</div></div>
                 </div>
             </div>
-
         </div>
     </div>
+</div>
 
-    <script src="/js/api.js?v=2"></script>
-    <script src="/js/driver.js?v=2"></script>
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- TAB: My Bids                                              -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="tab-pane" id="pane-bids">
+    <div class="page-body">
+        <div class="sec-hdr">
+            <span class="sec-title">My Active Bids</span>
+            <button class="refresh-btn" onclick="loadMyActiveBids()">↻ Refresh</button>
+        </div>
+        <div id="my-bids-list"><div class="loading">Loading...</div></div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- TAB: My Trips                                             -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="tab-pane" id="pane-trips">
+    <div class="page-body">
+        <div id="trip-map"></div>
+        <div class="sec-hdr">
+            <span class="sec-title">My Trips</span>
+            <button class="refresh-btn" onclick="loadMyTrips()">↻ Refresh</button>
+        </div>
+        <div id="my-trips-list"><div class="loading">Loading...</div></div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- TAB: My Rating                                            -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="tab-pane" id="pane-rating">
+    <div class="page-body" style="max-width:600px;">
+        <div class="sec-hdr">
+            <span class="sec-title">My Rating & History</span>
+        </div>
+        <div id="my-rating-box"><div class="loading">Loading...</div></div>
+    </div>
+</div>
+
+<script src="/js/api.js?v=4"></script>
+<script src="/js/driver.js?v=4"></script>
 </body>
 </html>
-

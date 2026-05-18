@@ -173,6 +173,29 @@ async function awardShipment(shipmentId, bidId = null) {
     });
 }
 
+// ---------- Escrow / Award-and-Pay ----------
+
+async function createAwardIntent(shipmentId, bidId = null) {
+    return apiFetch(`/api/payments/${shipmentId}/award-intent`, {
+        method: "POST",
+        body: bidId ? { bid_id: bidId } : {}
+    });
+}
+
+async function awardAndPay(shipmentId, paymentIntentId, bidId, cardNumber, expMonth, expYear, cvc) {
+    return apiFetch(`/api/payments/${shipmentId}/award-and-pay`, {
+        method: "POST",
+        body: {
+            payment_intent_id: paymentIntentId,
+            bid_id: bidId,
+            card_number: cardNumber,
+            exp_month: expMonth,
+            exp_year: expYear,
+            cvc: cvc
+        }
+    });
+}
+
 // ---------- POD & Proof Requests ----------
 
 async function uploadDeliveryPhoto(shipmentId, destId, photoFile, notes = "") {
@@ -230,6 +253,29 @@ async function raiseComplaint(shipmentId, reason, description = "") {
 
 async function getComplaints(shipmentId) {
     return apiFetch(`/api/pod/${shipmentId}/complaints`);
+}
+
+// ---------- Payments ----------
+
+async function createPaymentIntent(shipmentId) {
+    return apiFetch(`/api/payments/${shipmentId}/create-intent`, { method: "POST" });
+}
+
+async function confirmPayment(shipmentId, paymentIntentId, cardNumber, expMonth, expYear, cvc) {
+    return apiFetch(`/api/payments/${shipmentId}/pay`, {
+        method: "POST",
+        body: {
+            payment_intent_id: paymentIntentId,
+            card_number: cardNumber,
+            exp_month: expMonth,
+            exp_year: expYear,
+            cvc: cvc
+        }
+    });
+}
+
+async function getPaymentStatus(shipmentId) {
+    return apiFetch(`/api/payments/${shipmentId}/status`);
 }
 
 function fmt(amount) {

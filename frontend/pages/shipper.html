@@ -442,7 +442,7 @@
 </div>
 
 
-<script src="/js/api.js?v=2"></script>
+<script src="/js/api.js?v=4"></script>
     <script>
         // Guard: only shippers allowed
         if (!isLoggedIn() || getRole() !== "shipper") {
@@ -1315,6 +1315,19 @@
                             ${lowest.driver_name}
                         </span>
                     </div>`;
+                } else if (sDetail.status === "assigned" || sDetail.status === "in_transit") {
+                    // Payment is already held in escrow
+                    awardSection.innerHTML = `
+                    <div style="padding:10px 14px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);
+                                border-radius:8px;display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.2rem;">🔒</span>
+                        <div>
+                            <div style="font-weight:700;font-size:0.88rem;color:var(--green);">Payment Secured in Escrow</div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                Funds are safely held and will be released to the driver upon delivery.
+                            </div>
+                        </div>
+                    </div>`;
                 } else if (sDetail.status === "delivered") {
                     renderRatingSection(awardSection, shipmentId, sDetail);
                 }
@@ -1325,27 +1338,81 @@
         }
 
         function renderRatingSection(awardSection, shipmentId, sDetail) {
-            if (sDetail.shipper_rating) {
-                awardSection.innerHTML = `
-                <div class="alert alert-success" style="margin-top: 10px;">
-                    <strong>Rating Given:</strong> ⭐ ${sDetail.shipper_rating}
-                </div>`;
-            } else {
-                awardSection.innerHTML = `
-                <div class="card" style="margin-top: 10px; padding: 16px;">
-                    <div style="font-weight:600; margin-bottom:8px;">Rate the Driver</div>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <select id="driver-rating-${shipmentId}" class="form-control" style="width: 100px;">
-                            <option value="5">5 - Excellent</option>
-                            <option value="4">4 - Good</option>
-                            <option value="3">3 - Average</option>
-                            <option value="2">2 - Poor</option>
-                            <option value="1">1 - Terrible</option>
-                        </select>
-                        <button class="btn btn-primary btn-sm" onclick="submitRating('${shipmentId}')">Submit Rating</button>
-                    </div>
-                </div>`;
-            }
+            // Load payment status first, then render rating
+            getPaymentStatus(shipmentId).then(pay => {
+                let payHtml = '';
+                if (pay.status === 'succeeded' || pay.status === 'escrow_held' || pay.status === 'released_to_driver') {
+                    payHtml = `
+                    <div style="padding:10px 14px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);
+                                border-radius:8px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.2rem;">${pay.status === 'released_to_driver' ? '✅' : '🔒'}</span>
+                        <div>
+                            <div style="font-weight:700;font-size:0.88rem;color:var(--green);">Payment Received</div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                ${fmt(pay.amount)} · ${pay.card_brand ? pay.card_brand.toUpperCase() : ''} ****${pay.card_last4 || ''}
+                                · ${pay.paid_at ? new Date(pay.paid_at).toLocaleDateString('en-IN') : ''}
+                            </div>
+                        </div>
+                    </div>`;
+                } else if (pay.status === 'pending' || pay.status === 'not_initiated') {
+                    payHtml = `
+                    <div style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                                border-radius:8px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                        <div>
+                            <div style="font-weight:700;font-size:0.88rem;color:#f59e0b;">Payment Pending</div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                Amount due: ${fmt(pay.amount || sDetail.winning_bid_amount)}
+                            </div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="openPaymentModal('${shipmentId}')"
+                                style="white-space:nowrap;gap:6px;">
+                            💳 Pay Now
+                        </button>
+                    </div>`;
+                }
+
+                if (sDetail.shipper_rating) {
+                    awardSection.innerHTML = payHtml + `
+                    <div class="alert alert-success" style="margin-top:0;">
+                        <strong>Rating Given:</strong> ⭐ ${sDetail.shipper_rating}
+                    </div>`;
+                } else {
+                    awardSection.innerHTML = payHtml + `
+                    <div style="padding:14px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+                        <div style="font-weight:600;font-size:0.85rem;margin-bottom:10px;">Rate the Driver</div>
+                        <div style="display:flex;gap:10px;align-items:center;">
+                            <select id="driver-rating-${shipmentId}" style="width:130px;">
+                                <option value="5">⭐⭐⭐⭐⭐ Excellent</option>
+                                <option value="4">⭐⭐⭐⭐ Good</option>
+                                <option value="3">⭐⭐⭐ Average</option>
+                                <option value="2">⭐⭐ Poor</option>
+                                <option value="1">⭐ Terrible</option>
+                            </select>
+                            <button class="btn btn-primary btn-sm" onclick="submitRating('${shipmentId}')">Submit Rating</button>
+                        </div>
+                    </div>`;
+                }
+            }).catch(() => {
+                // Fallback if payment endpoint fails
+                if (sDetail.shipper_rating) {
+                    awardSection.innerHTML = `<div class="alert alert-success"><strong>Rating Given:</strong> ⭐ ${sDetail.shipper_rating}</div>`;
+                } else {
+                    awardSection.innerHTML = `
+                    <div style="padding:14px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+                        <div style="font-weight:600;font-size:0.85rem;margin-bottom:10px;">Rate the Driver</div>
+                        <div style="display:flex;gap:10px;align-items:center;">
+                            <select id="driver-rating-${shipmentId}" style="width:130px;">
+                                <option value="5">⭐⭐⭐⭐⭐ Excellent</option>
+                                <option value="4">⭐⭐⭐⭐ Good</option>
+                                <option value="3">⭐⭐⭐ Average</option>
+                                <option value="2">⭐⭐ Poor</option>
+                                <option value="1">⭐ Terrible</option>
+                            </select>
+                            <button class="btn btn-primary btn-sm" onclick="submitRating('${shipmentId}')">Submit Rating</button>
+                        </div>
+                    </div>`;
+                }
+            });
         }
 
         // ── Approve Driver Arrival ─────────────────────────────────
@@ -1359,16 +1426,141 @@
             }
         }
 
-        // ── Award Shipment ─────────────────────────────────────────
+        // ── Award Shipment — pay first, then award ─────────────────
         async function doAward(shipmentId, bidId = null) {
-            if (!confirm("Award this shipment? This cannot be undone.")) return;
+            // Open payment modal immediately — award happens only after payment succeeds
+            await openAwardPaymentModal(shipmentId, bidId);
+        }
+
+        async function openAwardPaymentModal(shipmentId, bidId) {
+            const existing = document.getElementById('payment-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'payment-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:3000;display:flex;align-items:center;justify-content:center;padding:24px;';
+            modal.innerHTML = `
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+                             max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;">
+                    <div style="padding:18px 22px;border-bottom:1px solid var(--border);
+                                background:rgba(0,0,0,0.2);display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <div style="font-family:var(--font-cond);font-weight:700;font-size:1.05rem;">🔒 Pay to Confirm Award</div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">Funds held in escrow — released to driver after delivery</div>
+                        </div>
+                        <button onclick="document.getElementById('payment-modal').remove()"
+                                style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+                    </div>
+                    <div id="award-pay-loading" style="padding:32px;text-align:center;color:var(--muted);">
+                        <div class="loading">Preparing payment...</div>
+                    </div>
+                    <div id="award-pay-form" style="display:none;padding:20px 22px;">
+                        <div id="award-pay-alert" style="margin-bottom:12px;"></div>
+
+                        <!-- Amount + driver info -->
+                        <div id="award-pay-summary" style="padding:12px 14px;background:rgba(245,158,11,0.06);
+                             border:1px solid rgba(245,158,11,0.2);border-radius:8px;margin-bottom:16px;"></div>
+
+                        <div style="margin-bottom:14px;">
+                            <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Card Number</label>
+                            <input type="text" id="pay-card-number" maxlength="19"
+                                   placeholder="4242 4242 4242 4242"
+                                   oninput="formatCardNumber(this)"
+                                   style="font-family:var(--font-mono);font-size:1rem;letter-spacing:0.08em;padding:11px 14px;">
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Month</label>
+                                <input type="number" id="pay-exp-month" placeholder="MM" min="1" max="12"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Year</label>
+                                <input type="number" id="pay-exp-year" placeholder="YYYY" min="2024" max="2040"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">CVC</label>
+                                <input type="text" id="pay-cvc" placeholder="123" maxlength="4"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;font-family:var(--font-mono);">
+                            </div>
+                        </div>
+                        <div style="padding:8px 12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);
+                                    border-radius:6px;margin-bottom:16px;font-size:0.72rem;color:#93c5fd;">
+                            🧪 <strong>Test card:</strong> 4242 4242 4242 4242 · Any future date · Any CVC
+                        </div>
+                        <button id="pay-btn" class="btn btn-primary btn-full"
+                                style="font-size:0.95rem;font-weight:700;padding:13px;">
+                            🔒 Pay & Confirm Award
+                        </button>
+                    </div>
+                </div>`;
+            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+            document.body.appendChild(modal);
+
+            // Create award intent
             try {
-                const result = await awardShipment(shipmentId, bidId);
-                alert(`✓ Awarded to ${result.awarded_to} for ${fmt(result.winning_amount)}`);
+                const intent = await createAwardIntent(shipmentId, bidId);
+                modal.dataset.piId  = intent.payment_intent_id;
+                modal.dataset.bidId = intent.bid_id;
+
+                // Show summary
+                document.getElementById('award-pay-loading').style.display = 'none';
+                document.getElementById('award-pay-form').style.display = 'block';
+                document.getElementById('award-pay-summary').innerHTML = `
+                    <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Awarding to</div>
+                    <div style="font-weight:700;font-size:0.95rem;margin-bottom:4px;">🚛 ${intent.driver_name}</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+                        <span style="font-size:0.8rem;color:var(--muted);">Escrow amount</span>
+                        <span style="font-family:var(--font-cond);font-size:1.3rem;font-weight:700;color:var(--accent);">${fmt(intent.amount)}</span>
+                    </div>
+                    <div style="font-size:0.72rem;color:var(--muted);margin-top:4px;">Held by FreightBid · Released to driver after delivery</div>`;
+
+                document.getElementById('pay-btn').onclick = () => doAwardAndPay(shipmentId);
+            } catch(err) {
+                document.getElementById('award-pay-loading').innerHTML =
+                    `<div class="alert alert-error" style="margin:0;">
+                        ❌ ${err.message.includes('503') || err.message.includes('unavailable')
+                            ? '🐳 Payment service offline. Run: <code>docker run -p 8420:8420 adrienverge/localstripe:latest</code>'
+                            : err.message}
+                    </div>`;
+            }
+        }
+
+        async function doAwardAndPay(shipmentId) {
+            const btn     = document.getElementById('pay-btn');
+            const alertEl = document.getElementById('award-pay-alert');
+            const modal   = document.getElementById('payment-modal');
+            if (!modal) return;
+
+            const piId    = modal.dataset.piId;
+            const bidId   = modal.dataset.bidId;
+            const cardNum = document.getElementById('pay-card-number').value.replace(/\s/g, '');
+            const expMonth = document.getElementById('pay-exp-month').value;
+            const expYear  = document.getElementById('pay-exp-year').value;
+            const cvc      = document.getElementById('pay-cvc').value;
+
+            if (!cardNum || cardNum.length < 13) {
+                alertEl.innerHTML = '<div class="alert alert-error">Enter a valid card number.</div>'; return;
+            }
+            if (!expMonth || !expYear || !cvc) {
+                alertEl.innerHTML = '<div class="alert alert-error">Fill in expiry and CVC.</div>'; return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Processing...';
+            alertEl.innerHTML = '';
+
+            try {
+                const result = await awardAndPay(shipmentId, piId, bidId, cardNum, expMonth, expYear, cvc);
+                modal.remove();
+                showShipperToast(`✅ Paid ${fmt(result.winning_amount)} · Awarded to ${result.awarded_to}`, 'success');
                 await loadMyShipments();
                 await selectShipment(shipmentId);
-            } catch (err) {
-                alert("Error: " + err.message);
+            } catch(err) {
+                alertEl.innerHTML = `<div class="alert alert-error">❌ ${err.message}</div>`;
+                btn.disabled = false;
+                btn.innerHTML = '🔒 Pay & Confirm Award';
             }
         }
 
@@ -1830,6 +2022,149 @@
                     }
                 } catch (e) { /* silent */ }
             }, 8000);
+        }
+
+        // ── Payment Modal ──────────────────────────────────────────
+        async function openPaymentModal(shipmentId) {
+            const existing = document.getElementById('payment-modal');
+            if (existing) existing.remove();
+
+            // Get shipment details for amount
+            let amount = 0;
+            try {
+                const s = await getShipment(shipmentId);
+                amount = s.winning_bid_amount || 0;
+            } catch(e) {}
+
+            const modal = document.createElement('div');
+            modal.id = 'payment-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:3000;display:flex;align-items:center;justify-content:center;padding:24px;';
+            modal.innerHTML = `
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+                             max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;">
+                    <!-- Header -->
+                    <div style="padding:18px 22px;border-bottom:1px solid var(--border);
+                                background:rgba(0,0,0,0.2);display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <div style="font-family:var(--font-cond);font-weight:700;font-size:1.05rem;">💳 Secure Payment</div>
+                            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">Powered by Stripe (Simulation)</div>
+                        </div>
+                        <button onclick="document.getElementById('payment-modal').remove()"
+                                style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+                    </div>
+
+                    <!-- Amount -->
+                    <div style="padding:16px 22px;background:rgba(245,158,11,0.06);border-bottom:1px solid var(--border);">
+                        <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">Amount Due</div>
+                        <div style="font-family:var(--font-cond);font-size:1.8rem;font-weight:700;color:var(--accent);">${fmt(amount)}</div>
+                    </div>
+
+                    <!-- Card Form -->
+                    <div style="padding:20px 22px;">
+                        <div id="pay-alert" style="margin-bottom:12px;"></div>
+
+                        <div style="margin-bottom:14px;">
+                            <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Card Number</label>
+                            <input type="text" id="pay-card-number" maxlength="19"
+                                   placeholder="4242 4242 4242 4242"
+                                   oninput="formatCardNumber(this)"
+                                   style="font-family:var(--font-mono);font-size:1rem;letter-spacing:0.08em;padding:11px 14px;">
+                        </div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Month</label>
+                                <input type="number" id="pay-exp-month" placeholder="MM" min="1" max="12"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">Year</label>
+                                <input type="number" id="pay-exp-year" placeholder="YYYY" min="2024" max="2040"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem;color:var(--muted);display:block;margin-bottom:5px;">CVC</label>
+                                <input type="text" id="pay-cvc" placeholder="123" maxlength="4"
+                                       style="text-align:center;padding:11px 8px;font-size:0.95rem;font-family:var(--font-mono);">
+                            </div>
+                        </div>
+
+                        <!-- Test card hint -->
+                        <div style="padding:8px 12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);
+                                    border-radius:6px;margin-bottom:16px;font-size:0.72rem;color:#93c5fd;">
+                            🧪 <strong>Test card:</strong> 4242 4242 4242 4242 · Any future date · Any CVC
+                        </div>
+
+                        <button id="pay-btn" class="btn btn-primary btn-full"
+                                onclick="doConfirmPayment('${shipmentId}')"
+                                style="font-size:0.95rem;font-weight:700;padding:13px;">
+                            💳 Pay ${fmt(amount)}
+                        </button>
+                    </div>
+                </div>`;
+            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+            document.body.appendChild(modal);
+
+            // Create payment intent
+            try {
+                const intent = await createPaymentIntent(shipmentId);
+                modal.dataset.piId = intent.payment_intent_id;
+            } catch(err) {
+                document.getElementById('pay-alert').innerHTML =
+                    `<div class="alert alert-error">
+                        ❌ ${err.message.includes('503') || err.message.includes('unavailable')
+                            ? '🐳 Payment service is offline. Start the localstripe Docker container first:<br><code style="font-size:0.75rem;">docker run -p 8420:8420 adrienverge/localstripe:latest</code>'
+                            : err.message}
+                    </div>`;
+                document.getElementById('pay-btn').disabled = true;
+            }
+        }
+
+        function formatCardNumber(input) {
+            let v = input.value.replace(/\D/g, '').substring(0, 16);
+            input.value = v.replace(/(\d{4})(?=\d)/g, '$1 ');
+        }
+
+        async function doConfirmPayment(shipmentId) {
+            const btn     = document.getElementById('pay-btn');
+            const alertEl = document.getElementById('pay-alert');
+            const modal   = document.getElementById('payment-modal');
+            if (!modal) return;
+
+            const piId      = modal.dataset.piId;
+            const cardNum   = document.getElementById('pay-card-number').value.replace(/\s/g, '');
+            const expMonth  = document.getElementById('pay-exp-month').value;
+            const expYear   = document.getElementById('pay-exp-year').value;
+            const cvc       = document.getElementById('pay-cvc').value;
+
+            if (!piId) {
+                alertEl.innerHTML = '<div class="alert alert-error">Payment not initialized. Please close and try again.</div>';
+                return;
+            }
+            if (!cardNum || cardNum.length < 13) {
+                alertEl.innerHTML = '<div class="alert alert-error">Enter a valid card number.</div>';
+                return;
+            }
+            if (!expMonth || !expYear || !cvc) {
+                alertEl.innerHTML = '<div class="alert alert-error">Fill in expiry and CVC.</div>';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span style="opacity:0.7">Processing...</span>';
+            alertEl.innerHTML = '';
+
+            try {
+                const result = await confirmPayment(shipmentId, piId, cardNum, expMonth, expYear, cvc);
+                modal.remove();
+                showShipperToast(`✅ Payment of ${fmt(result.amount)} successful!`, 'success');
+                // Refresh the detail panel to show payment status
+                await selectShipment(shipmentId);
+            } catch(err) {
+                alertEl.innerHTML = `<div class="alert alert-error">❌ ${err.message}</div>`;
+                btn.disabled = false;
+                btn.innerHTML = '💳 Try Again';
+            }
         }
     </script>
 </body>
