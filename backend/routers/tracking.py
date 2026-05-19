@@ -3,12 +3,13 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import TrackingEvent, Shipment
 from auth_utils import get_current_user
+from ws_manager import broadcast_shipment
 
 router = APIRouter()
 
 
 @router.post("/{shipment_id}/location")
-def update_location(
+async def update_location(
     shipment_id: str,
     data: dict,
     db: Session = Depends(get_db),
@@ -39,6 +40,17 @@ def update_location(
     )
     db.add(event)
     db.commit()
+    db.refresh(event)
+
+    await broadcast_shipment(
+        shipment_id,
+        {
+            "type": "driver_location",
+            "lat": float(data["lat"]),
+            "lng": float(data["lng"]),
+            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+        },
+    )
 
     return {"message": "Location updated"}
 

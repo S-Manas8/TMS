@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Shipment, User, Bid, Rating, ShipmentDestination, Payment
+from models import Shipment, User, Bid, Rating, ShipmentDestination, Payment, TrackingEvent, CancellationRecord
 from auth_utils import get_current_user
 import datetime
 import math
@@ -152,6 +153,11 @@ def get_my_shipments(
     for s in shipments:
         bids = db.query(Bid).filter(Bid.shipment_id == s.id).all()
         dests = db.query(ShipmentDestination).filter(ShipmentDestination.shipment_id == s.id).order_by(ShipmentDestination.order_index).all()
+        
+        payment = db.query(Payment).filter(Payment.shipment_id == s.id).order_by(Payment.created_at.desc()).first()
+        driver_fee = payment.driver_fee if (payment and payment.status == "cancelled_with_fee") else None
+        shipper_refund = payment.shipper_refund if (payment and payment.status == "cancelled_with_fee") else None
+
         result.append({
             "id": s.id,
             "pickup_address": s.pickup_address,
@@ -168,6 +174,8 @@ def get_my_shipments(
             "started_at": s.started_at.isoformat() if s.started_at else None,
             "delivered_at": s.delivered_at.isoformat() if s.delivered_at else None,
             "winning_bid_amount": s.winning_bid_amount,
+            "driver_fee": driver_fee,
+            "shipper_refund": shipper_refund,
             "destinations": [{"id": d.id, "address": d.address, "lat": d.lat, "lng": d.lng, "status": d.status, "order_index": d.order_index, "ack_status": d.ack_status} for d in dests],
             "bids": [
                 {
@@ -201,7 +209,7 @@ def get_my_bids(
         db.query(Bid, Shipment)
         .join(Shipment, Shipment.id == Bid.shipment_id)
         .filter(Bid.driver_id == user["sub"])
-        .filter(Shipment.status != "cancelled")   # hide cancelled shipments from driver
+        .filter(or_(Shipment.status != "cancelled", Bid.is_winner == True))
         .order_by(Bid.created_at.desc())
         .all()
     )
@@ -226,6 +234,10 @@ def get_my_bids(
             ).first()
             was_abandoned = child is not None
 
+        payment = db.query(Payment).filter(Payment.shipment_id == shipment.id).order_by(Payment.created_at.desc()).first()
+        driver_fee = payment.driver_fee if (payment and payment.status == "cancelled_with_fee") else None
+        shipper_refund = payment.shipper_refund if (payment and payment.status == "cancelled_with_fee") else None
+
         result.append({
             "bid_id":             bid.id,
             "my_amount":          bid.amount,
@@ -243,6 +255,8 @@ def get_my_bids(
             "vehicle_type":       shipment.vehicle_type,
             "deadline":           shipment.deadline.isoformat() if shipment.deadline else None,
             "winning_bid_amount": shipment.winning_bid_amount,
+            "driver_fee":         driver_fee,
+            "shipper_refund":     shipper_refund,
             "total_bids":         db.query(Bid).filter(Bid.shipment_id == shipment.id).count(),
         })
 
@@ -274,6 +288,10 @@ def get_shipment(
     
     dests = db.query(ShipmentDestination).filter(ShipmentDestination.shipment_id == s.id).order_by(ShipmentDestination.order_index).all()
 
+    payment = db.query(Payment).filter(Payment.shipment_id == s.id).order_by(Payment.created_at.desc()).first()
+    driver_fee = payment.driver_fee if (payment and payment.status == "cancelled_with_fee") else None
+    shipper_refund = payment.shipper_refund if (payment and payment.status == "cancelled_with_fee") else None
+
     return {
         "id": s.id,
         "pickup_address": s.pickup_address,
@@ -290,6 +308,8 @@ def get_shipment(
         "started_at": s.started_at.isoformat() if s.started_at else None,
         "delivered_at": s.delivered_at.isoformat() if s.delivered_at else None,
         "winning_bid_amount": s.winning_bid_amount,
+        "driver_fee": driver_fee,
+        "shipper_refund": shipper_refund,
         "assigned_driver": driver,
         "shipper_rating": shipper_rating,
         "destinations": [{"id": d.id, "address": d.address, "lat": d.lat, "lng": d.lng, "status": d.status, "order_index": d.order_index, "ack_status": d.ack_status} for d in dests],
@@ -552,13 +572,28 @@ def update_destination_status(
 @router.post("/{shipment_id}/cancel")
 def cancel_shipment(
     shipment_id: str,
+    data: dict,
     db: Session = Depends(get_db),
     authorization: str = Header(None)
 ):
     """
-    Shipper cancels an open shipment.
-    Only allowed when status is 'open' (not yet assigned to a driver).
-    Deletes all bids so drivers no longer see it in their bid history.
+    Shipper cancels a shipment. Handles all scenarios:
+
+    Scenario 1 — open, no bids:
+      Free cancel. No payment involved.
+
+    Scenario 2 — open, bids placed:
+      Free cancel. Bids voided. No payment involved.
+
+    Scenario 3 — assigned (escrow held, driver en route):
+      20% of trip fare kept as compensation for driver.
+      80% refunded to shipper (simulated — payment record updated).
+      Shipment cancelled.
+
+    Scenario 4 — in_transit:
+      Cannot cancel via this endpoint. Use abandon instead.
+
+    Body: { reason: str }
     """
     user = get_current_user(authorization)
     if user["role"] != "shipper":
@@ -569,15 +604,244 @@ def cancel_shipment(
         raise HTTPException(404, "Shipment not found")
     if s.shipper_id != user["sub"]:
         raise HTTPException(403, "You don't own this shipment")
-    if s.status != "open":
-        raise HTTPException(400, f"Cannot cancel a shipment with status '{s.status}'. Only open shipments can be cancelled.")
+    if s.status == "delivered":
+        raise HTTPException(400, "Cannot cancel a delivered shipment")
+    if s.status == "cancelled":
+        raise HTTPException(400, "Shipment is already cancelled")
 
-    # Mark as cancelled
-    s.status = "cancelled"
-    db.commit()
+    reason = (data.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "Cancellation reason is required")
 
-    return {"message": "Shipment cancelled successfully"}
+    bid_count = db.query(Bid).filter(Bid.shipment_id == shipment_id).count()
 
+    # ── Scenario 1 & 2: open shipment ─────────────────────────
+    if s.status == "open":
+        s.status = "cancelled"
+        rec = CancellationRecord(
+            shipment_id=shipment_id, shipper_id=user["sub"],
+            driver_id=s.assigned_driver_id, reason=reason,
+            scenario="no_penalty", trip_amount=0, driver_fee=0, shipper_refund=0
+        )
+        db.add(rec)
+        db.commit()
+        return {
+            "message":          "Shipment cancelled successfully",
+            "scenario":         "no_penalty",
+            "driver_fee":       0,
+            "shipper_refund":   0,
+            "bid_count":        bid_count
+        }
+
+    # ── Scenario 3: assigned — escrow held, driver en route ───
+    if s.status == "assigned":
+        # Check if driver has physically arrived at pickup
+        dests = db.query(ShipmentDestination).filter(
+            ShipmentDestination.shipment_id == shipment_id
+        ).order_by(ShipmentDestination.order_index).all()
+
+        driver_arrived = any(
+            d.ack_status in ("pending_approval", "approved") for d in dests
+        )
+
+        trip_amount = s.winning_bid_amount or 0
+
+        # ── KM-based compensation formula ─────────────────────
+        # Total route = pickup → all stops (haversine)
+        # Driver travelled = pickup → driver's last GPS position
+        #
+        # driver_fee = (km_travelled / total_route_km) × bid_amount
+        # Minimum guaranteed: ₹50 (fuel cost floor)
+        # Maximum cap: 50% of bid (driver hasn't loaded goods yet)
+
+        total_route_km = 0.0
+        prev_lat, prev_lng = s.pickup_lat, s.pickup_lng
+        for d in dests:
+            total_route_km += haversine_distance(prev_lat, prev_lng, d.lat, d.lng)
+            prev_lat, prev_lng = d.lat, d.lng
+
+        # Get driver's last known GPS position
+        last_gps = db.query(TrackingEvent).filter(
+            TrackingEvent.shipment_id == shipment_id
+        ).order_by(TrackingEvent.timestamp.desc()).first()
+
+        km_travelled = 0.0
+        if last_gps and s.pickup_lat and s.pickup_lng:
+            km_travelled = haversine_distance(
+                s.pickup_lat, s.pickup_lng,
+                last_gps.lat, last_gps.lng
+            )
+
+        # Calculate proportional fee
+        if total_route_km > 0 and km_travelled > 0:
+            proportion  = min(km_travelled / total_route_km, 0.50)  # cap at 50%
+            driver_fee  = round(max(50.0, trip_amount * proportion), 2)
+        elif driver_arrived:
+            # Driver arrived but no GPS data — use 25% as fallback
+            driver_fee = round(trip_amount * 0.25, 2)
+        else:
+            # Driver en route, no GPS — use 10% as fallback
+            driver_fee = round(max(50.0, trip_amount * 0.10), 2)
+
+        driver_fee = min(driver_fee, trip_amount * 0.50)  # hard cap at 50%
+        refund     = round(trip_amount - driver_fee, 2)
+
+        # Update payment record
+        payment = db.query(Payment).filter(
+            Payment.shipment_id == shipment_id,
+            Payment.status.in_(["escrow_held", "succeeded", "pending"])
+        ).first()
+        if payment:
+            payment.status = "cancelled_with_fee"
+            payment.driver_fee = driver_fee
+            payment.shipper_refund = refund
+            db.commit()
+
+        # Mark shipment cancelled
+        s.status = "cancelled"
+        rec = CancellationRecord(
+            shipment_id=shipment_id, shipper_id=user["sub"],
+            driver_id=s.assigned_driver_id, reason=reason,
+            scenario="assigned_penalty", trip_amount=trip_amount,
+            driver_fee=driver_fee, shipper_refund=refund,
+            km_travelled=round(km_travelled, 1),
+            total_route_km=round(total_route_km, 1)
+        )
+        db.add(rec)
+        db.commit()
+
+        return {
+            "message":        "Shipment cancelled. Driver compensation applied.",
+            "scenario":       "assigned_penalty",
+            "driver_arrived": driver_arrived,
+            "km_travelled":   round(km_travelled, 1),
+            "total_route_km": round(total_route_km, 1),
+            "trip_amount":    trip_amount,
+            "driver_fee":     driver_fee,
+            "shipper_refund": refund,
+            "driver_id":      s.assigned_driver_id
+        }
+
+    # ── Scenario 4: in_transit — driver is on the road ────────
+    # Goods are NOT considered loaded until shipper approves arrival.
+    # Pay proportionally: (completed stops / total stops) × bid amount
+    if s.status == "in_transit":
+        all_dests      = db.query(ShipmentDestination).filter(
+            ShipmentDestination.shipment_id == shipment_id
+        ).order_by(ShipmentDestination.order_index).all()
+
+        total_stops     = len(all_dests)
+        completed_stops = sum(1 for d in all_dests if d.status == "delivered")
+        trip_amount     = s.winning_bid_amount or 0
+
+        if total_stops > 0 and completed_stops > 0:
+            proportion = completed_stops / total_stops
+            driver_fee = round(trip_amount * proportion, 2)
+        else:
+            # No stops completed — use km-based formula same as assigned
+            last_gps = db.query(TrackingEvent).filter(
+                TrackingEvent.shipment_id == shipment_id
+            ).order_by(TrackingEvent.timestamp.desc()).first()
+
+            total_route_km = 0.0
+            prev_lat, prev_lng = s.pickup_lat, s.pickup_lng
+            for d in all_dests:
+                total_route_km += haversine_distance(prev_lat, prev_lng, d.lat, d.lng)
+                prev_lat, prev_lng = d.lat, d.lng
+
+            km_travelled = 0.0
+            if last_gps and s.pickup_lat and s.pickup_lng:
+                km_travelled = haversine_distance(
+                    s.pickup_lat, s.pickup_lng, last_gps.lat, last_gps.lng
+                )
+
+            if total_route_km > 0 and km_travelled > 0:
+                proportion = min(km_travelled / total_route_km, 0.50)
+                driver_fee = round(max(50.0, trip_amount * proportion), 2)
+            else:
+                driver_fee = round(max(50.0, trip_amount * 0.10), 2)
+
+        driver_fee = min(driver_fee, trip_amount)
+        refund     = round(trip_amount - driver_fee, 2)
+
+        payment = db.query(Payment).filter(
+            Payment.shipment_id == shipment_id,
+            Payment.status.in_(["escrow_held", "succeeded", "pending"])
+        ).first()
+        if payment:
+            payment.status = "cancelled_with_fee"
+            payment.driver_fee = driver_fee
+            payment.shipper_refund = refund
+            db.commit()
+
+        s.status = "cancelled"
+        rec = CancellationRecord(
+            shipment_id=shipment_id, shipper_id=user["sub"],
+            driver_id=s.assigned_driver_id, reason=reason,
+            scenario="in_transit_penalty", trip_amount=trip_amount,
+            driver_fee=driver_fee, shipper_refund=refund,
+            completed_stops=completed_stops, total_stops=total_stops
+        )
+        db.add(rec)
+        db.commit()
+
+        return {
+            "message":        "Shipment cancelled mid-trip. Proportional payment applied.",
+            "scenario":       "in_transit_penalty",
+            "completed_stops": completed_stops,
+            "total_stops":    total_stops,
+            "trip_amount":    trip_amount,
+            "driver_fee":     driver_fee,
+            "shipper_refund": refund,
+            "driver_id":      s.assigned_driver_id
+        }
+
+
+
+
+@router.get("/{shipment_id}/cancellation")
+def get_cancellation_record(
+    shipment_id: str,
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """Get cancellation details for a shipment (shipper or driver)."""
+    user = get_current_user(authorization)
+
+    s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not s:
+        raise HTTPException(404, "Shipment not found")
+
+    if user["role"] == "shipper" and s.shipper_id != user["sub"]:
+        raise HTTPException(403, "Not your shipment")
+    if user["role"] == "driver" and s.assigned_driver_id != user["sub"]:
+        raise HTTPException(403, "Not assigned to this shipment")
+
+    rec = db.query(CancellationRecord).filter(
+        CancellationRecord.shipment_id == shipment_id
+    ).order_by(CancellationRecord.cancelled_at.desc()).first()
+
+    if not rec:
+        return None
+
+    shipper = db.query(User).filter(User.id == rec.shipper_id).first()
+    driver  = db.query(User).filter(User.id == rec.driver_id).first() if rec.driver_id else None
+
+    return {
+        "scenario":        rec.scenario,
+        "reason":          rec.reason,
+        "trip_amount":     rec.trip_amount,
+        "driver_fee":      rec.driver_fee,
+        "shipper_refund":  rec.shipper_refund,
+        "km_travelled":    rec.km_travelled,
+        "total_route_km":  rec.total_route_km,
+        "completed_stops": rec.completed_stops,
+        "total_stops":     rec.total_stops,
+        "cancelled_at":    rec.cancelled_at.isoformat(),
+        "shipper_name":    shipper.name if shipper else None,
+        "driver_name":     driver.name if driver else None,
+        "driver_phone":    driver.phone if driver else None,
+    }
 
 @router.post("/{shipment_id}/abandon")
 def abandon_shipment(

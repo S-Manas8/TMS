@@ -148,6 +148,27 @@ class Payment(Base):
     card_brand         = Column(String, nullable=True)
     created_at         = Column(DateTime, default=datetime.datetime.utcnow)
     paid_at            = Column(DateTime, nullable=True)
+    driver_fee         = Column(Float, nullable=True)
+    shipper_refund     = Column(Float, nullable=True)
+
+
+class CancellationRecord(Base):
+    __tablename__ = "cancellation_records"
+
+    id              = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id     = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    shipper_id      = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    driver_id       = Column(TEXT, ForeignKey("users.id"), nullable=True)
+    reason          = Column(String, nullable=False)
+    scenario        = Column(String, nullable=False)   # no_penalty / assigned_penalty / in_transit_penalty
+    trip_amount     = Column(Float, default=0)
+    driver_fee      = Column(Float, default=0)
+    shipper_refund  = Column(Float, default=0)
+    km_travelled    = Column(Float, nullable=True)
+    total_route_km  = Column(Float, nullable=True)
+    completed_stops = Column(Integer, nullable=True)
+    total_stops     = Column(Integer, nullable=True)
+    cancelled_at    = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class Rating(Base):

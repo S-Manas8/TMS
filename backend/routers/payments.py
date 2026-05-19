@@ -322,7 +322,6 @@ def get_payment_status(
         raise HTTPException(403, "Not your shipment")
     if user["role"] == "driver" and s.assigned_driver_id != user["sub"]:
         raise HTTPException(403, "Not assigned to this shipment")
-
     payment = db.query(Payment).filter(
         Payment.shipment_id == shipment_id
     ).order_by(Payment.created_at.desc()).first()
@@ -347,6 +346,8 @@ def get_payment_status(
         "shipper_phone": shipper.phone if shipper else None,
         "driver_name":   driver.name if driver else None,
         "escrow_status": payment.status,
+        "driver_fee":     payment.driver_fee,
+        "shipper_refund": payment.shipper_refund,
     }
 
 

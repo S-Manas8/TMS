@@ -20,6 +20,15 @@ function getName() { return localStorage.getItem("fb_name"); }
 function getUserId() { return localStorage.getItem("fb_id"); }
 function isLoggedIn() { return !!getToken(); }
 
+/** WebSocket URL for a shipment room (token in query — browsers cannot set WS headers). */
+function getWsShipmentUrl(shipmentId) {
+    if (!shipmentId || !getToken()) return null;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host;
+    return proto + "//" + host + "/ws/shipment/" + encodeURIComponent(shipmentId)
+        + "?token=" + encodeURIComponent(getToken());
+}
+
 function logout() {
     ["fb_token", "fb_role", "fb_name", "fb_id"].forEach(k => localStorage.removeItem(k));
     window.location.href = "/";
@@ -173,6 +182,17 @@ async function awardShipment(shipmentId, bidId = null) {
     });
 }
 
+async function cancelShipment(shipmentId, reason) {
+    return apiFetch(`/api/shipments/${shipmentId}/cancel`, {
+        method: "POST",
+        body: { reason }
+    });
+}
+
+async function getCancellationRecord(shipmentId) {
+    return apiFetch(`/api/shipments/${shipmentId}/cancellation`);
+}
+
 // ---------- Escrow / Award-and-Pay ----------
 
 async function createAwardIntent(shipmentId, bidId = null) {
@@ -311,6 +331,7 @@ function statusBadge(status) {
         assigned: ["🔵", "#3b82f6"],
         in_transit: ["🟠", "#fb923c"],
         delivered: ["🟢", "#22c55e"],
+        cancelled: ["🚫", "#ef4444"],
     };
     const [icon, color] = map[status] || ["⚪", "#6b7280"];
     return `<span style="color:${color};font-size:0.8rem;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.06em">${icon} ${status.replace("_", " ")}</span>`;

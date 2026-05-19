@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* ── Stats bar ───────────────────────────────────────── */
         .stats-bar {
@@ -123,6 +124,7 @@
         .pill-assigned  { background:rgba(59,130,246,0.15); color:#3b82f6; }
         .pill-transit   { background:rgba(251,146,60,0.15); color:#fb923c; }
         .pill-delivered { background:rgba(16,185,129,0.15); color:#10b981; }
+        .pill-cancelled { background:rgba(239,68,68,0.15); color:#ef4444; }
 
         /* ── Two-col layout for find loads ──────────────────── */
         .loads-layout {
@@ -214,6 +216,9 @@
     <button class="tab-btn" id="tabn-rating" onclick="switchTab('rating')">
         ⭐ My Rating
     </button>
+    <button class="tab-btn" id="tabn-analytics" onclick="switchTab('analytics')">
+        📊 Insights
+    </button>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════ -->
@@ -285,6 +290,17 @@
 <!-- ══════════════════════════════════════════════════════════ -->
 <div class="tab-pane" id="pane-trips">
     <div class="page-body">
+        <div id="trip-live-panel" style="display:none;margin-bottom:14px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
+            <div style="font-size:0.72rem;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Live — Shipper</div>
+            <div id="trip-live-ws-status" style="font-size:0.68rem;color:var(--muted);margin-bottom:8px;"></div>
+            <div id="trip-live-messages" style="max-height:140px;overflow-y:auto;font-size:0.82rem;border:1px solid var(--border);border-radius:8px;padding:8px;background:rgba(0,0,0,0.15);margin-bottom:8px;"></div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="trip-live-input" placeholder="Message shipper…" maxlength="2000"
+                       style="flex:1;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:0.85rem;"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();sendTripLiveChat();}">
+                <button type="button" class="btn btn-primary btn-sm" onclick="sendTripLiveChat()">Send</button>
+            </div>
+        </div>
         <div id="trip-map"></div>
         <div class="sec-hdr">
             <span class="sec-title">My Trips</span>
@@ -306,7 +322,102 @@
     </div>
 </div>
 
-<script src="/js/api.js?v=4"></script>
-<script src="/js/driver.js?v=4"></script>
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- TAB: Insights                                             -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div class="tab-pane" id="pane-analytics">
+    <div class="page-body" style="max-width:1200px; padding: 20px 24px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:16px;">
+            <div class="sec-hdr" style="margin-bottom:0;">
+                <span class="sec-title">Earnings & Trip Insights</span>
+            </div>
+            <select id="driver-timeframe" onchange="renderDriverAnalytics()" style="width:160px; padding:8px 12px; font-size:0.85rem; background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px;">
+                <option value="all">All Time</option>
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="180">Last 6 Months</option>
+            </select>
+        </div>
+
+        <!-- Driver KPI Row -->
+        <div style="margin-bottom: 24px; display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="dr-kpi-earnings" style="font-size:1.6rem; color:#10b981;">₹0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Total Earnings</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="dr-kpi-escrow" style="font-size:1.6rem; color:#f59e0b;">₹0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">In Escrow</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="dr-kpi-weight" style="font-size:1.6rem; color:#3b82f6;">0 kg</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Total Weight Hauled</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="dr-kpi-trips" style="font-size:1.6rem; color:#a855f7;">0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Completed Trips</span>
+            </div>
+        </div>
+
+        <!-- Driver Charts Grid -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap:24px; margin-bottom:24px;">
+            <!-- Chart 1: Earnings Trend -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Earnings Trend</div>
+                <div style="position:relative; height:300px;">
+                    <canvas id="chart-driver-earnings"></canvas>
+                </div>
+            </div>
+
+            <!-- Chart 2: Cargo Categories hauled -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Haulage Categories Breakdown</div>
+                <div style="position:relative; height:300px; display:flex; justify-content:center;">
+                    <canvas id="chart-driver-categories" style="max-width:300px;"></canvas>
+                </div>
+            </div>
+
+            <!-- Chart 3: Average Earnings by Vehicle Type -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Earnings by Vehicle Type</div>
+                <div style="position:relative; height:300px;">
+                    <canvas id="chart-driver-vehicles"></canvas>
+                </div>
+            </div>
+
+            <!-- Chart 4: Trip Completion Performance -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Trip Status Distribution</div>
+                <div style="position:relative; height:300px; display:flex; justify-content:center;">
+                    <canvas id="chart-driver-trips" style="max-width:300px;"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Driver Table -->
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; overflow:hidden;">
+            <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Trip & Category Breakdown Matrix</div>
+            <div style="overflow-x:auto;">
+                <table class="bid-table" id="table-driver-categories" style="width:100%; border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border);">
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Category</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Trips Completed</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Total Earnings</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Avg. Earning / Trip</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Cargo Weight Hauled</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Dynamically filled -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/js/api.js?v=6"></script>
+<script src="/js/driver.js?v=6"></script>
 </body>
 </html>

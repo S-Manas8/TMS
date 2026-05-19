@@ -3,10 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>FreightBid — Shipper Dashboard</title>
     <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* ── Layout ─────────────────────────────────────────────── */
         .dashboard {
@@ -54,6 +57,7 @@
         .pill-assigned { background: rgba(59,130,246,0.15); color: #3b82f6; }
         .pill-transit  { background: rgba(251,146,60,0.15); color: #fb923c; }
         .pill-delivered{ background: rgba(16,185,129,0.15); color: #10b981; }
+        .pill-cancelled{ background: rgba(239,68,68,0.15); color: #ef4444; }
 
         /* ── Detail panel ───────────────────────────────────────── */
         .detail-sticky {
@@ -218,6 +222,38 @@
         }
         .counter-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
         .counter-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        /* ── Tab nav ─────────────────────────────────────────── */
+        .tab-nav {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0,0,0,0.2);
+            padding: 0 24px;
+            gap: 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+            margin-bottom: 0;
+        }
+        .tab-nav::-webkit-scrollbar { display: none; }
+        .tab-btn {
+            padding: 13px 20px;
+            font-family: var(--font-cond);
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        
+        /* tab-pane-main visibility controlled via JS */
     </style>
 </head>
 <body>
@@ -235,6 +271,19 @@
         <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
     </div>
 </nav>
+
+<!-- ── Tab Nav ───────────────────────────────────────────────── -->
+<div class="tab-nav">
+    <button class="tab-btn active" id="tabn-board" onclick="switchMainTab('board')">
+        📦 Shipment Board
+    </button>
+    <button class="tab-btn" id="tabn-analytics" onclick="switchMainTab('analytics')">
+        📊 Analytics & Insights
+    </button>
+</div>
+
+<!-- ── TAB: Shipment Board ───────────────────────────────────── -->
+<div class="tab-pane-main" id="pane-board" style="display:block;">
 
 <!-- ── Stats Bar ─────────────────────────────────────────────── -->
 <div class="stats-bar">
@@ -297,7 +346,19 @@
             </div>
 
             <!-- Meta strip -->
-            <div id="detail-meta" class="meta-row" style="padding:12px 18px;border-bottom:1px solid var(--border);gap:16px;margin:0;"></div>
+                <div id="detail-meta" class="meta-row" style="padding:12px 18px;border-bottom:1px solid var(--border);gap:16px;margin:0;"></div>
+
+                <div id="live-trip-panel" style="display:none;padding:12px 18px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.12);">
+                    <div style="font-size:0.72rem;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Live trip</div>
+                    <div id="live-ws-status" style="font-size:0.68rem;color:var(--muted);margin-bottom:8px;">Connecting…</div>
+                    <div id="live-chat-messages" style="max-height:140px;overflow-y:auto;font-size:0.82rem;border:1px solid var(--border);border-radius:8px;padding:8px;background:var(--surface);margin-bottom:8px;"></div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="text" id="live-chat-input" placeholder="Message driver…" maxlength="2000"
+                               style="flex:1;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:0.85rem;"
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();sendLiveTripChat();}">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="sendLiveTripChat()">Send</button>
+                    </div>
+                </div>
 
             <!-- Tabs -->
             <div class="detail-tabs">
@@ -335,6 +396,104 @@
                 <div id="pod-section" style="display:block;">
                     <div id="pod-photos-grid"></div>
                 </div>
+            </div>
+    </div>
+</div>
+</div> <!-- Close pane-board -->
+
+<!-- ── TAB: Analytics & Insights ──────────────────────────────── -->
+<div class="tab-pane-main" id="pane-analytics" style="display:none;">
+    <div class="page-body" style="max-width: 1400px; margin: 0 auto; padding: 20px 24px;">
+        <!-- Filters & Timeframe Selectors -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:16px;">
+            <h2 style="font-family:var(--font-cond); font-size:1.5rem; font-weight:700; margin:0;">📊 Shipping Analytics & Insights</h2>
+            <div style="display:flex; gap:12px; align-items:center;">
+                <select id="shipper-timeframe" onchange="renderShipperAnalytics()" style="width:160px; padding:8px 12px; font-size:0.85rem; background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px;">
+                    <option value="all">All Time</option>
+                    <option value="30">Last 30 Days</option>
+                    <option value="90">Last 90 Days</option>
+                    <option value="180">Last 6 Months</option>
+                </select>
+                <select id="shipper-category-filter" onchange="renderShipperAnalytics()" style="width:160px; padding:8px 12px; font-size:0.85rem; background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px;">
+                    <option value="all">All Categories</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- KPI Metrics Cards Row -->
+        <div style="margin-bottom: 24px; border:none; background:none; padding:0; display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="sh-kpi-spend" style="font-size:1.6rem; color:#f59e0b;">₹0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Total Spend</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="sh-kpi-weight" style="font-size:1.6rem; color:#10b981;">0 kg</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Cargo Weight Shipped</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="sh-kpi-trips" style="font-size:1.6rem; color:#3b82f6;">0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Total Shipments</span>
+            </div>
+            <div class="stat-chip" style="flex-direction:column; align-items:flex-start; padding:16px 20px; border-radius:12px; gap:4px; height:auto;">
+                <span class="stat-chip-num" id="sh-kpi-avg-cost" style="font-size:1.6rem; color:#a855f7;">₹0</span>
+                <span class="stat-chip-label" style="text-transform:uppercase; font-size:0.68rem; letter-spacing:0.05em;">Avg. Cost / Trip</span>
+            </div>
+        </div>
+
+        <!-- Charts Grid Layout -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap:24px; margin-bottom:24px;">
+            <!-- Chart 1: Spend & Volume by Category -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Spend & Weight by Product Category</div>
+                <div style="position:relative; height:320px;">
+                    <canvas id="chart-shipper-categories"></canvas>
+                </div>
+            </div>
+            
+            <!-- Chart 2: Category Distribution -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Shipment Count by Product Category</div>
+                <div style="position:relative; height:320px; display:flex; justify-content:center;">
+                    <canvas id="chart-shipper-pie" style="max-width:320px;"></canvas>
+                </div>
+            </div>
+
+            <!-- Chart 3: Cost Trend Over Time -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Monthly Expenditure Trend</div>
+                <div style="position:relative; height:320px;">
+                    <canvas id="chart-shipper-trend"></canvas>
+                </div>
+            </div>
+
+            <!-- Chart 4: Vehicle Type Analytics -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px;">
+                <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Vehicle Type Utilization & Cost</div>
+                <div style="position:relative; height:320px;">
+                    <canvas id="chart-shipper-vehicles"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Categories Summary Table -->
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; overflow:hidden;">
+            <div style="font-family:var(--font-cond); font-weight:700; font-size:0.9rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:16px;">Product Category Performance Matrix</div>
+            <div style="overflow-x:auto;">
+                <table class="bid-table" id="table-shipper-categories" style="width:100%; border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border);">
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Category</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Shipments</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Total Weight (kg)</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Total Spend</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Avg Cost / Trip</th>
+                            <th style="padding:10px 12px; text-align:left; font-size:0.75rem; color:var(--muted); text-transform:uppercase;">Status Summary</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Dynamically generated rows -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -442,7 +601,7 @@
 </div>
 
 
-<script src="/js/api.js?v=4"></script>
+<script src="/js/api.js?v=6"></script>
     <script>
         // Guard: only shippers allowed
         if (!isLoggedIn() || getRole() !== "shipper") {
@@ -479,7 +638,7 @@
             document.getElementById('detail-panel').classList.remove('visible');
             currentShipmentId = null;
             document.querySelectorAll('.shipment-card').forEach(c => c.classList.remove('selected'));
-            stopTrackingPoll();
+            stopTripLiveFeed();
         }
 
         let currentShipmentId = null;
@@ -874,6 +1033,9 @@
             try {
                 myShipments = await getMyShipments();
                 updateStats(myShipments);
+                if (typeof mainTab !== 'undefined' && mainTab === 'analytics') {
+                    renderShipperAnalytics();
+                }
 
                 if (!myShipments.length) {
                     container.innerHTML = `
@@ -885,8 +1047,8 @@
                     return;
                 }
 
-                const pillClass = { open:'pill-open', assigned:'pill-assigned', in_transit:'pill-transit', delivered:'pill-delivered' };
-                const pillIcon  = { open:'🟡', assigned:'🔵', in_transit:'🟠', delivered:'🟢' };
+                const pillClass = { open:'pill-open', assigned:'pill-assigned', in_transit:'pill-transit', delivered:'pill-delivered', cancelled:'pill-cancelled' };
+                const pillIcon  = { open:'🟡', assigned:'🔵', in_transit:'🟠', delivered:'🟢', cancelled:'🚫' };
 
                 container.innerHTML = myShipments.map(s => {
                     const dest = s.destinations && s.destinations.length > 0
@@ -906,15 +1068,26 @@
                                     → ${dest}
                                 </div>
                             </div>
-                            <span class="status-pill ${pillClass[s.status] || 'pill-open'}">
-                                ${pillIcon[s.status] || '⚪'} ${s.status.replace('_',' ')}
-                            </span>
+                            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                                <span class="status-pill ${pillClass[s.status] || 'pill-open'}">
+                                    ${pillIcon[s.status] || '⚪'} ${s.status.replace('_',' ')}
+                                </span>
+                                ${['open','assigned','in_transit'].includes(s.status) ? `
+                                <button onclick="event.stopPropagation();openCancelModal('${s.id}','${s.status}',${s.winning_bid_amount||0})"
+                                        style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);
+                                               color:#ef4444;border-radius:6px;padding:2px 8px;font-size:0.7rem;
+                                               cursor:pointer;white-space:nowrap;">
+                                    ✕ Cancel
+                                </button>` : ''}
+                            </div>
                         </div>
                         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
                             <span style="font-size:0.78rem;color:var(--muted);">📦 ${s.goods_desc}</span>
                             <span style="font-size:0.78rem;color:var(--muted);">⚖️ ${s.weight_kg} kg</span>
-                            ${bidCount > 0 ? `<span style="font-size:0.75rem;font-family:var(--font-mono);color:var(--accent);background:rgba(245,158,11,0.1);padding:1px 7px;border-radius:10px;">${bidCount} bid${bidCount!==1?'s':''}</span>` : ''}
-                            ${s.winning_bid_amount ? `<span style="font-size:0.75rem;color:var(--green);font-family:var(--font-mono);">${fmt(s.winning_bid_amount)}</span>` : ''}
+                            ${bidCount > 0 && s.status !== 'cancelled' ? `<span style="font-size:0.75rem;font-family:var(--font-mono);color:var(--accent);background:rgba(245,158,11,0.1);padding:1px 7px;border-radius:10px;">${bidCount} bid${bidCount!==1?'s':''}</span>` : ''}
+                            ${s.winning_bid_amount && s.status !== 'cancelled' ? `<span style="font-size:0.75rem;color:var(--green);font-family:var(--font-mono);">${fmt(s.winning_bid_amount)}</span>` : ''}
+                            ${s.status === 'cancelled' && s.shipper_refund !== null && s.shipper_refund !== undefined ? `<span style="font-size:0.75rem;color:var(--green);font-family:var(--font-mono);background:rgba(34,197,94,0.1);padding:1px 6px;border-radius:4px;">Refunded: ${fmt(s.shipper_refund)}</span>` : ''}
+                            ${s.status === 'cancelled' && s.driver_fee !== null && s.driver_fee !== undefined ? `<span style="font-size:0.75rem;color:#ef4444;font-family:var(--font-mono);background:rgba(239,68,68,0.1);padding:1px 6px;border-radius:4px;">Driver: ${fmt(s.driver_fee)}</span>` : ''}
                             ${s.status === 'delivered' && s.started_at && s.delivered_at ? `<span style="font-size:0.75rem;color:var(--green);">⏱ ${calculateTimeTaken(s.started_at, s.delivered_at)}</span>` : ''}
                             <span style="font-size:0.72rem;color:var(--muted);margin-left:auto;">${timeAgo(s.created_at)}</span>
                         </div>
@@ -945,6 +1118,170 @@
         let detailMarkers = [];
         let driverMarker = null;
         let trackingPollInterval = null;
+        let shipmentLiveWs = null;
+        let shipmentPingTimer = null;
+
+        function stopTripLiveFeed() {
+            if (trackingPollInterval) {
+                clearInterval(trackingPollInterval);
+                trackingPollInterval = null;
+            }
+            if (shipmentPingTimer) {
+                clearInterval(shipmentPingTimer);
+                shipmentPingTimer = null;
+            }
+            if (shipmentLiveWs) {
+                try { shipmentLiveWs.close(); } catch (e) {}
+                shipmentLiveWs = null;
+            }
+            const panel = document.getElementById('live-trip-panel');
+            if (panel) panel.style.display = 'none';
+            const box = document.getElementById('live-chat-messages');
+            if (box) box.innerHTML = '';
+            const st = document.getElementById('live-ws-status');
+            if (st) st.textContent = '';
+        }
+
+        function setLiveTripPanelVisible(show) {
+            const p = document.getElementById('live-trip-panel');
+            if (p) p.style.display = show ? 'block' : 'none';
+        }
+
+        function setLiveWsStatus(text) {
+            const el = document.getElementById('live-ws-status');
+            if (el) el.textContent = text;
+        }
+
+        function escapeHtml(str) {
+            if (str == null || str === '') return '';
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function appendLiveChatLine(fromRole, senderName, text, ts) {
+            const box = document.getElementById('live-chat-messages');
+            if (!box) return;
+            const whoLabel = fromRole === 'driver' ? 'Driver' : 'Shipper';
+            const line = `<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.1);">
+                <span style="font-size:0.68rem;color:var(--muted);">${escapeHtml(ts || '')}</span>
+                <div><strong>${escapeHtml(senderName || whoLabel)}</strong> <span style="color:var(--muted);font-size:0.7rem;">(${whoLabel})</span></div>
+                <div style="margin-top:2px;">${escapeHtml(text)}</div></div>`;
+            box.insertAdjacentHTML('beforeend', line);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function sendLiveTripChat() {
+            if (!shipmentLiveWs || shipmentLiveWs.readyState !== WebSocket.OPEN) return;
+            const inp = document.getElementById('live-chat-input');
+            const text = (inp && inp.value || '').trim();
+            if (!text) return;
+            try {
+                shipmentLiveWs.send(JSON.stringify({ type: 'chat', text: text }));
+                inp.value = '';
+            } catch (e) { console.error(e); }
+        }
+
+        function applyDriverPosition(lat, lng) {
+            if (!detailMap || lat == null || lng == null) return;
+            const pos = [lat, lng];
+            if (!driverMarker) {
+                driverMarker = L.marker(pos, {
+                    icon: L.icon({
+                        iconUrl: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 16]
+                    })
+                }).addTo(detailMap).bindPopup('Driver is here');
+            } else {
+                driverMarker.setLatLng(pos);
+            }
+        }
+
+        async function fetchLatestDriverDot(shipmentId) {
+            try {
+                const data = await getLatestLocation(shipmentId);
+                if (data && data.lat) applyDriverPosition(data.lat, data.lng);
+            } catch (e) { console.error('Latest location', e); }
+        }
+
+        function pollDriverLocationFallback(shipmentId) {
+            if (trackingPollInterval) clearInterval(trackingPollInterval);
+            const tick = async () => {
+                try {
+                    const data = await getLatestLocation(shipmentId);
+                    if (data && data.lat) applyDriverPosition(data.lat, data.lng);
+                } catch (e) { console.error('Poll error', e); }
+            };
+            tick();
+            trackingPollInterval = setInterval(tick, 15000);
+        }
+
+        function startLiveTripFeed(shipmentId) {
+            stopTripLiveFeed();
+            setLiveTripPanelVisible(true);
+            setLiveWsStatus('Connecting…');
+
+            fetchLatestDriverDot(shipmentId);
+
+            const url = getWsShipmentUrl(shipmentId);
+            if (!url) {
+                setLiveWsStatus('Sign in required for live updates');
+                pollDriverLocationFallback(shipmentId);
+                return;
+            }
+            try {
+                shipmentLiveWs = new WebSocket(url);
+            } catch (e) {
+                console.error(e);
+                setLiveWsStatus('WebSocket unavailable — using periodic refresh');
+                pollDriverLocationFallback(shipmentId);
+                return;
+            }
+
+            shipmentLiveWs.onopen = () => {
+                setLiveWsStatus('Live — WebSocket connected');
+                shipmentPingTimer = setInterval(() => {
+                    if (shipmentLiveWs && shipmentLiveWs.readyState === WebSocket.OPEN) {
+                        try { shipmentLiveWs.send(JSON.stringify({ type: 'ping' })); } catch (x) {}
+                    }
+                }, 45000);
+            };
+            shipmentLiveWs.onmessage = (ev) => {
+                let msg;
+                try { msg = JSON.parse(ev.data); } catch (x) { return; }
+                if (msg.type === 'driver_location' && msg.lat != null && msg.lng != null) {
+                    applyDriverPosition(msg.lat, msg.lng);
+                } else if (msg.type === 'chat') {
+                    appendLiveChatLine(msg.from_role, msg.sender_name, msg.text, msg.ts);
+                } else if (msg.type === 'shipment_status') {
+                    if (msg.status === 'delivered') {
+                        setLiveWsStatus('Trip completed');
+                        showShipperToast('Shipment marked delivered', 'success');
+                    }
+                    loadMyShipments();
+                    if (currentShipmentId === msg.shipment_id) {
+                        selectShipment(msg.shipment_id);
+                    }
+                } else if (msg.type === 'connected') {
+                    setLiveWsStatus('Live — WebSocket connected');
+                }
+            };
+            shipmentLiveWs.onerror = () => setLiveWsStatus('Connection error');
+            shipmentLiveWs.onclose = () => {
+                if (shipmentPingTimer) {
+                    clearInterval(shipmentPingTimer);
+                    shipmentPingTimer = null;
+                }
+                shipmentLiveWs = null;
+                setLiveWsStatus('Disconnected — periodic refresh');
+                if (currentShipmentId === shipmentId) pollDriverLocationFallback(shipmentId);
+            };
+        }
+
+        async function pollDriverLocation(shipmentId) {
+            startLiveTripFeed(shipmentId);
+        }
 
         function initDetailMap() {
             if (detailMap) return;
@@ -992,38 +1329,6 @@
             if (points.length > 0) {
                 detailMap.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
             }
-        }
-
-        async function pollDriverLocation(shipmentId) {
-            if (trackingPollInterval) clearInterval(trackingPollInterval);
-            
-            const update = async () => {
-                try {
-                    const data = await getLatestLocation(shipmentId);
-                    if (data && data.lat) {
-                        const pos = [data.lat, data.lng];
-                        if (!driverMarker) {
-                            driverMarker = L.marker(pos, {
-                                icon: L.icon({
-                                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png', // truck icon
-                                    iconSize: [32, 32],
-                                    iconAnchor: [16, 16]
-                                })
-                            }).addTo(detailMap).bindPopup("Driver is here");
-                        } else {
-                            driverMarker.setLatLng(pos);
-                        }
-                    }
-                } catch (e) { console.error("Poll error", e); }
-            };
-
-            update();
-            trackingPollInterval = setInterval(update, 10000);
-        }
-
-        function stopTrackingPoll() {
-            if (trackingPollInterval) clearInterval(trackingPollInterval);
-            trackingPollInterval = null;
         }
 
         async function selectShipment(id) {
@@ -1082,7 +1387,7 @@
                 if (s.status === 'in_transit') {
                     pollDriverLocation(id);
                 } else {
-                    stopTrackingPoll();
+                    stopTripLiveFeed();
                 }
 
                 // Load photos tab content
@@ -1168,13 +1473,24 @@
                             : '<span style="font-size:0.7rem;color:var(--muted);font-family:var(--font-mono);' +
                               'margin-right:6px;">pending</span>';
 
+                        // Show Cancel button alongside Approve when driver has arrived
+                        const cancelBtn = d.ack_status === "pending_approval"
+                            ? '<button class="btn btn-sm" ' +
+                              'style="padding:4px 10px;font-size:0.72rem;background:rgba(239,68,68,0.1);' +
+                              'color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:6px;cursor:pointer;margin-left:4px;" ' +
+                              'onclick="openCancelModal(\'' + s.id + '\',\'' + s.status + '\',' + (s.winning_bid_amount||0) + ')">' +
+                              '✕ Cancel Load' +
+                              '</button>'
+                            : '';
+
                         rightSide =
                             driverBadge +
                             '<button class="btn btn-primary btn-sm" ' +
                             'style="padding:4px 12px;font-size:0.75rem;font-weight:600;" ' +
                             'onclick="doApproveArrival(\'' + s.id + '\',\'' + d.id + '\')">' +
                             '✓ Approve' +
-                            '</button>';
+                            '</button>' +
+                            cancelBtn;
 
                     } else {
                         rightSide =
@@ -1328,6 +1644,44 @@
                             </div>
                         </div>
                     </div>`;
+                } else if (sDetail.status === "cancelled") {
+                    if (sDetail.shipper_refund !== null || sDetail.driver_fee !== null) {
+                        awardSection.innerHTML = `
+                        <div style="padding:12px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);
+                                    border-radius:8px;display:flex;flex-direction:column;gap:8px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:1.2rem;">🚫</span>
+                                <div>
+                                    <div style="font-weight:700;font-size:0.88rem;color:#ef4444;">Shipment Cancelled</div>
+                                    <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                        Refund and driver fee splits are finalized below.
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+                                <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+                                    <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">Refunded to You</div>
+                                    <div style="font-weight:700;font-size:1.1rem;color:var(--green);">${fmt(sDetail.shipper_refund || 0)}</div>
+                                </div>
+                                <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+                                    <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">Driver Compensation</div>
+                                    <div style="font-weight:700;font-size:1.1rem;color:#ef4444;">${fmt(sDetail.driver_fee || 0)}</div>
+                                </div>
+                            </div>
+                        </div>`;
+                    } else {
+                        awardSection.innerHTML = `
+                        <div style="padding:10px 14px;background:rgba(107,114,128,0.1);border:1px solid rgba(107,114,128,0.25);
+                                    border-radius:8px;display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:1.2rem;">🚫</span>
+                            <div>
+                                <div style="font-weight:700;font-size:0.88rem;color:var(--muted);">Shipment Cancelled</div>
+                                <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">
+                                    Cancelled before driver was assigned. No fees applied.
+                                </div>
+                            </div>
+                        </div>`;
+                    }
                 } else if (sDetail.status === "delivered") {
                     renderRatingSection(awardSection, shipmentId, sDetail);
                 }
@@ -1954,6 +2308,167 @@
             setTimeout(() => toast.remove(), 4000);
         }
 
+        // ── Cancellation Modal ─────────────────────────────────────
+        function openCancelModal(shipmentId, currentStatus, tripAmount) {
+            const existing = document.getElementById('cancel-shipment-modal');
+            if (existing) existing.remove();
+
+            const isAssigned  = currentStatus === 'assigned';
+            const isInTransit = currentStatus === 'in_transit';
+            const needsFee    = isAssigned || isInTransit;
+
+            let feeFormula = '';
+            if (isAssigned)  feeFormula = 'Fee = (km driver travelled ÷ total route km) × ₹' + (tripAmount||0).toLocaleString('en-IN');
+            if (isInTransit) feeFormula = 'Fee = (stops completed ÷ total stops) × ₹' + (tripAmount||0).toLocaleString('en-IN');
+
+            const warningHtml = needsFee ? `
+                <div id="cancel-fee-preview" style="padding:12px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);
+                             border-radius:8px;margin-bottom:16px;">
+                    <div style="font-weight:700;font-size:0.85rem;color:#ef4444;margin-bottom:6px;">
+                        ⚠️ ${isInTransit ? 'Driver is on the road — proportional fee applies' : 'Driver has been assigned — cancellation fee applies'}
+                    </div>
+                    <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">${feeFormula}</div>
+                    <div id="cancel-fee-breakdown" style="font-size:0.78rem;color:var(--muted);">
+                        <div class="loading" style="padding:8px 0;">Calculating...</div>
+                    </div>
+                </div>` : `
+                <div style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                             border-radius:8px;margin-bottom:16px;font-size:0.8rem;color:var(--muted);">
+                    ℹ️ No driver assigned yet. This cancellation is free.
+                </div>`;
+
+            const modal = document.createElement('div');
+            modal.id = 'cancel-shipment-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:3000;display:flex;align-items:center;justify-content:center;padding:24px;';
+            modal.innerHTML = `
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+                             max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;">
+                    <div style="padding:18px 22px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2);
+                                display:flex;justify-content:space-between;align-items:center;">
+                        <div style="font-family:var(--font-cond);font-weight:700;font-size:1.05rem;">Cancel Shipment</div>
+                        <button onclick="document.getElementById('cancel-shipment-modal').remove()"
+                                style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+                    </div>
+                    <div style="padding:20px 22px;">
+                        <div id="cancel-alert" style="margin-bottom:12px;"></div>
+                        ${warningHtml}
+                        <div class="form-group" style="margin-bottom:16px;">
+                            <label style="font-size:0.8rem;">Reason for cancellation <span style="color:#ef4444;">*</span></label>
+                            <select id="cancel-reason" style="width:100%;margin-bottom:0;">
+                                <option value="">— Select a reason —</option>
+                                <option value="Changed my mind">Changed my mind</option>
+                                <option value="Found another carrier">Found another carrier</option>
+                                <option value="Shipment details changed">Shipment details changed</option>
+                                <option value="Goods not ready">Goods not ready</option>
+                                <option value="Budget constraints">Budget constraints</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div style="display:flex;gap:10px;">
+                            <button onclick="document.getElementById('cancel-shipment-modal').remove()"
+                                    class="btn btn-outline" style="flex:1;">Keep Shipment</button>
+                            <button onclick="doConfirmCancel('${shipmentId}')"
+                                    id="confirm-cancel-btn"
+                                    class="btn btn-sm" style="flex:1.5;background:#ef4444;color:#fff;
+                                    border:none;border-radius:8px;font-weight:700;cursor:pointer;padding:12px;">
+                                Confirm Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+            document.body.appendChild(modal);
+
+            // Fetch live fee preview for assigned or in_transit
+            if (needsFee) {
+                fetchCancelPreview(shipmentId, tripAmount, currentStatus);
+            }
+        }
+
+        async function fetchCancelPreview(shipmentId, tripAmount) {
+            const breakdownEl = document.getElementById('cancel-fee-breakdown');
+            if (!breakdownEl) return;
+            try {
+                // Dry-run: call cancel with a preview flag — we use a GET on payment status
+                // to get GPS data, then compute locally for preview
+                const loc = await getLatestLocation(shipmentId).catch(() => null);
+                const s   = await getShipment(shipmentId);
+
+                // Compute total route km client-side
+                let totalKm = 0;
+                let prevLat = s.pickup_lat, prevLng = s.pickup_lng;
+                (s.destinations || []).forEach(d => {
+                    totalKm += haversine(prevLat, prevLng, d.lat, d.lng);
+                    prevLat = d.lat; prevLng = d.lng;
+                });
+
+                let kmTravelled = 0;
+                if (loc && loc.lat && s.pickup_lat) {
+                    kmTravelled = haversine(s.pickup_lat, s.pickup_lng, loc.lat, loc.lng);
+                }
+
+                let driverFee, note;
+                if (totalKm > 0 && kmTravelled > 0) {
+                    const proportion = Math.min(kmTravelled / totalKm, 0.50);
+                    driverFee = Math.max(50, Math.round(tripAmount * proportion));
+                    note = `Driver travelled ${kmTravelled.toFixed(1)} km of ${totalKm.toFixed(1)} km total`;
+                } else {
+                    // Driver arrived but no GPS — 25% fallback
+                    driverFee = Math.round(tripAmount * 0.25);
+                    note = 'Driver GPS not available — using 25% estimate';
+                }
+                driverFee = Math.min(driverFee, Math.round(tripAmount * 0.50));
+                const refund = tripAmount - driverFee;
+
+                breakdownEl.innerHTML = `
+                    <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">${note}</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+                            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">Driver Gets</div>
+                            <div style="font-weight:700;font-size:1rem;color:#ef4444;">${fmt(driverFee)}</div>
+                        </div>
+                        <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:8px 12px;">
+                            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">You Get Back</div>
+                            <div style="font-weight:700;font-size:1rem;color:var(--green);">${fmt(refund)}</div>
+                        </div>
+                    </div>`;
+            } catch(e) {
+                breakdownEl.innerHTML = '<div style="font-size:0.78rem;color:var(--muted);">Could not calculate preview. Actual amount calculated at cancellation.</div>';
+            }
+        }
+
+        async function doConfirmCancel(shipmentId) {
+            const reason = document.getElementById('cancel-reason').value;
+            if (!reason) {
+                document.getElementById('cancel-alert').innerHTML =
+                    '<div class="alert alert-error" style="margin:0 0 8px;">Please select a reason.</div>';
+                return;
+            }
+            const btn = document.getElementById('confirm-cancel-btn');
+            btn.disabled = true;
+            btn.textContent = 'Cancelling...';
+            try {
+                const result = await cancelShipment(shipmentId, reason);
+                document.getElementById('cancel-shipment-modal').remove();
+                if (result.scenario === 'assigned_penalty' || result.scenario === 'in_transit_penalty') {
+                    showShipperToast(
+                        `Cancelled · ${fmt(result.driver_fee)} sent to driver · ${fmt(result.shipper_refund)} refunded`,
+                        'error'
+                    );
+                } else {
+                    showShipperToast('Shipment cancelled successfully', 'success');
+                }
+                // Close detail panel if it was showing this shipment
+                if (currentShipmentId === shipmentId) closeDetail();
+                await loadMyShipments();
+            } catch(err) {
+                document.getElementById('cancel-alert').innerHTML =
+                    `<div class="alert alert-error" style="margin:0 0 8px;">${err.message}</div>`;
+                btn.disabled = false;
+                btn.textContent = 'Confirm Cancel';
+            }
+        }
+
         function openPhotoModal(url, label, uploadedAt) {
             let modal = document.getElementById('photo-modal');
             if (modal) modal.remove();
@@ -2165,6 +2680,364 @@
                 btn.disabled = false;
                 btn.innerHTML = '💳 Try Again';
             }
+        }
+
+        // ── Main Tab Switching & Analytics ─────────────────────────
+        let mainTab = 'board';
+        async function switchMainTab(tab) {
+            mainTab = tab;
+            // Toggle tab buttons
+            document.getElementById('tabn-board').classList.toggle('active', tab === 'board');
+            document.getElementById('tabn-analytics').classList.toggle('active', tab === 'analytics');
+            // Show/hide panes with inline style (reliable, no CSS conflict)
+            document.getElementById('pane-board').style.display = tab === 'board' ? 'block' : 'none';
+            document.getElementById('pane-analytics').style.display = tab === 'analytics' ? 'block' : 'none';
+
+            if (tab === 'analytics') {
+                // Fetch fresh data if not loaded
+                if (!myShipments || myShipments.length === 0) {
+                    try { myShipments = await getMyShipments(); } catch(e) {}
+                }
+                // Wait for DOM paint so Chart.js can measure canvas dimensions
+                setTimeout(renderShipperAnalytics, 80);
+            }
+        }
+
+        let chartShipperCategories = null;
+        let chartShipperPie = null;
+        let chartShipperTrend = null;
+        let chartShipperVehicles = null;
+
+        function categorizeGoods(desc) {
+            if (!desc) return "Other";
+            const d = desc.toLowerCase().trim();
+            if (d.includes("electr") || d.includes("phone") || d.includes("tv") || d.includes("computer") || d.includes("gadget") || d.includes("appliances")) return "Electronics";
+            if (d.includes("food") || d.includes("veget") || d.includes("fruit") || d.includes("grain") || d.includes("grocery") || d.includes("milk") || d.includes("beverag") || d.includes("meat") || d.includes("perish")) return "Food & Perishables";
+            if (d.includes("furnit") || d.includes("wood") || d.includes("table") || d.includes("chair") || d.includes("bed") || d.includes("desk")) return "Furniture";
+            if (d.includes("chem") || d.includes("pharma") || d.includes("drug") || d.includes("med") || d.includes("acid") || d.includes("fertiliz")) return "Chemicals & Pharma";
+            if (d.includes("steel") || d.includes("metal") || d.includes("iron") || d.includes("cement") || d.includes("brick") || d.includes("construct") || d.includes("pip") || d.includes("sand") || d.includes("industrial")) return "Industrial & Metal";
+            if (d.includes("cloth") || d.includes("textil") || d.includes("garment") || d.includes("apparel") || d.includes("shoe") || d.includes("fabric")) return "Apparel & Textiles";
+            if (d.includes("paper") || d.includes("book") || d.includes("cardboard") || d.includes("station")) return "Paper & Print";
+            if (d.includes("car") || d.includes("auto") || d.includes("motor") || d.includes("part") || d.includes("wheel") || d.includes("tyre")) return "Automotive";
+            if (d.includes("pack") || d.includes("box") || d.includes("carton") || d.includes("bag") || d.includes("container") || d.includes("logistics")) return "Packaged Goods";
+            return "Other";
+        }
+
+        function renderShipperAnalytics() {
+            const timeframe = document.getElementById("shipper-timeframe").value;
+            const catFilter = document.getElementById("shipper-category-filter").value;
+
+            // Show empty state if no data
+            if (!myShipments || myShipments.length === 0) {
+                document.getElementById("sh-kpi-spend").textContent = "₹0";
+                document.getElementById("sh-kpi-weight").textContent = "0 kg";
+                document.getElementById("sh-kpi-trips").textContent = "0";
+                document.getElementById("sh-kpi-avg-cost").textContent = "—";
+                const tableBody = document.querySelector("#table-shipper-categories tbody");
+                if (tableBody) tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No shipment data yet. Post your first load to see analytics.</td></tr>`;
+                return;
+            }
+
+            // Filter shipments by timeframe
+            let filtered = myShipments;
+            const now = new Date();
+            if (timeframe !== 'all') {
+                const daysLimit = parseInt(timeframe);
+                const limitDate = new Date(now.getTime() - daysLimit * 24 * 60 * 60 * 1000);
+                filtered = filtered.filter(s => new Date(s.created_at) >= limitDate);
+            }
+
+            // Classify all shipments in this filtered list
+            const classified = filtered.map(s => ({
+                ...s,
+                category: categorizeGoods(s.goods_desc)
+            }));
+
+            // Populate category filter dropdown dynamically if it's empty/first run
+            const selectFilter = document.getElementById("shipper-category-filter");
+            if (selectFilter.options.length <= 1) {
+                const uniqueCats = Array.from(new Set(myShipments.map(s => categorizeGoods(s.goods_desc))));
+                uniqueCats.sort();
+                uniqueCats.forEach(cat => {
+                    const opt = document.createElement("option");
+                    opt.value = cat;
+                    opt.textContent = cat;
+                    selectFilter.appendChild(opt);
+                });
+            }
+
+            // Apply category filter if set
+            let finalShipments = classified;
+            if (catFilter !== 'all') {
+                finalShipments = classified.filter(s => s.category === catFilter);
+            }
+
+            // Compute KPI metrics
+            let totalSpend = 0;
+            let totalWeight = 0;
+            let totalTrips = finalShipments.length;
+            let paidOrAssignedTrips = 0;
+
+            finalShipments.forEach(s => {
+                totalWeight += Number(s.weight_kg) || 0;
+                if (s.winning_bid_amount && s.status !== 'cancelled') {
+                    totalSpend += Number(s.winning_bid_amount);
+                    paidOrAssignedTrips++;
+                }
+            });
+
+            const avgCost = paidOrAssignedTrips > 0 ? Math.round(totalSpend / paidOrAssignedTrips) : 0;
+
+            // Update KPI UI elements
+            document.getElementById("sh-kpi-spend").textContent = "₹" + totalSpend.toLocaleString('en-IN');
+            document.getElementById("sh-kpi-weight").textContent = totalWeight >= 1000 
+                ? (totalWeight / 1000).toFixed(1) + " tons" 
+                : totalWeight.toLocaleString('en-IN') + " kg";
+            document.getElementById("sh-kpi-trips").textContent = totalTrips;
+            document.getElementById("sh-kpi-avg-cost").textContent = avgCost > 0 ? "₹" + avgCost.toLocaleString('en-IN') : "—";
+
+            // Prepare charts category data
+            const categoriesData = {};
+            finalShipments.forEach(s => {
+                const cat = s.category;
+                if (!categoriesData[cat]) {
+                    categoriesData[cat] = { count: 0, spend: 0, weight: 0 };
+                }
+                categoriesData[cat].count++;
+                if (s.winning_bid_amount && s.status !== 'cancelled') {
+                    categoriesData[cat].spend += Number(s.winning_bid_amount);
+                }
+                categoriesData[cat].weight += Number(s.weight_kg) || 0;
+            });
+
+            const catLabels = Object.keys(categoriesData).sort();
+            const catCounts = catLabels.map(l => categoriesData[l].count);
+            const catSpends = catLabels.map(l => categoriesData[l].spend);
+            const catWeights = catLabels.map(l => Math.round(categoriesData[l].weight / 100) / 10); // in tons
+
+            // Render Table
+            const tableBody = document.querySelector("#table-shipper-categories tbody");
+            if (tableBody) {
+                if (catLabels.length === 0) {
+                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;">No shipping data matches these filters.</td></tr>`;
+                } else {
+                    tableBody.innerHTML = catLabels.map(l => {
+                        const data = categoriesData[l];
+                        const avg = data.spend > 0 ? Math.round(data.spend / data.count) : 0;
+                        const statuses = finalShipments.filter(s => s.category === l).map(s => s.status);
+                        const openC = statuses.filter(s => s === 'open').length;
+                        const activeC = statuses.filter(s => ['assigned','in_transit'].includes(s)).length;
+                        const doneC = statuses.filter(s => s === 'delivered').length;
+                        const cancelC = statuses.filter(s => s === 'cancelled').length;
+                        const statusSummary = [];
+                        if (openC > 0) statusSummary.push(`🟡 ${openC} Open`);
+                        if (activeC > 0) statusSummary.push(`🔵 ${activeC} Active`);
+                        if (doneC > 0) statusSummary.push(`🟢 ${doneC} Done`);
+                        if (cancelC > 0) statusSummary.push(`🚫 ${cancelC} Cancelled`);
+
+                        return `<tr style="border-bottom:1px solid var(--border);">
+                            <td style="padding:10px 12px;"><strong>${l}</strong></td>
+                            <td style="padding:10px 12px;">${data.count}</td>
+                            <td style="padding:10px 12px;">${data.weight.toLocaleString('en-IN')} kg</td>
+                            <td style="padding:10px 12px;">${data.spend > 0 ? '₹' + data.spend.toLocaleString('en-IN') : '—'}</td>
+                            <td style="padding:10px 12px;">${avg > 0 ? '₹' + avg.toLocaleString('en-IN') : '—'}</td>
+                            <td style="padding:10px 12px; font-size:0.75rem;color:var(--muted);">${statusSummary.join(' · ')}</td>
+                        </tr>`;
+                    }).join('');
+                }
+            }
+
+            // Chart.js rendering
+            // 1. Spend & Volume by Category
+            if (chartShipperCategories) chartShipperCategories.destroy();
+            const ctxCats = document.getElementById('chart-shipper-categories').getContext('2d');
+            chartShipperCategories = new Chart(ctxCats, {
+                type: 'bar',
+                data: {
+                    labels: catLabels,
+                    datasets: [
+                        {
+                            label: 'Total Spend (₹)',
+                            data: catSpends,
+                            backgroundColor: 'rgba(59, 130, 246, 0.65)',
+                            borderColor: '#3b82f6',
+                            borderWidth: 1.5,
+                            yAxisID: 'y-spend'
+                        },
+                        {
+                            label: 'Weight (Tons)',
+                            data: catWeights,
+                            backgroundColor: 'rgba(16, 185, 129, 0.65)',
+                            borderColor: '#10b981',
+                            borderWidth: 1.5,
+                            yAxisID: 'y-weight'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8', font: { family: 'Inter' } } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.08)' } },
+                        'y-spend': {
+                            type: 'linear',
+                            position: 'left',
+                            ticks: { color: '#94a3b8', callback: value => '₹' + value.toLocaleString('en-IN') },
+                            grid: { color: 'rgba(148, 163, 184, 0.08)' }
+                        },
+                        'y-weight': {
+                            type: 'linear',
+                            position: 'right',
+                            ticks: { color: '#94a3b8', callback: value => value + ' t' },
+                            grid: { drawOnChartArea: false }
+                        }
+                    }
+                }
+            });
+
+            // 2. Shipment count by Category
+            if (chartShipperPie) chartShipperPie.destroy();
+            const ctxPie = document.getElementById('chart-shipper-pie').getContext('2d');
+            chartShipperPie = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: catLabels,
+                    datasets: [{
+                        data: catCounts,
+                        backgroundColor: [
+                            'rgba(245, 158, 11, 0.7)',
+                            'rgba(59, 130, 246, 0.7)',
+                            'rgba(16, 185, 129, 0.7)',
+                            'rgba(239, 68, 68, 0.7)',
+                            'rgba(139, 92, 246, 0.7)',
+                            'rgba(236, 72, 153, 0.7)',
+                            'rgba(20, 184, 166, 0.7)',
+                            'rgba(100, 116, 139, 0.7)'
+                        ],
+                        borderWidth: 1,
+                        borderColor: '#1e293b'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { color: '#94a3b8', font: { family: 'Inter', size: 10 } } }
+                    }
+                }
+            });
+
+            // 3. Spend Trend Over Time
+            const monthlyData = {};
+            finalShipments.forEach(s => {
+                if (s.winning_bid_amount && s.status !== 'cancelled') {
+                    const date = new Date(s.created_at);
+                    const key = date.toLocaleString('default', { month: 'short', year: 'numeric' });
+                    if (!monthlyData[key]) monthlyData[key] = { spend: 0, count: 0, dateObj: date };
+                    monthlyData[key].spend += Number(s.winning_bid_amount);
+                    monthlyData[key].count++;
+                }
+            });
+
+            const sortedMonths = Object.keys(monthlyData).sort((a, b) => monthlyData[a].dateObj - monthlyData[b].dateObj);
+            const trendSpends = sortedMonths.map(m => monthlyData[m].spend);
+
+            if (chartShipperTrend) chartShipperTrend.destroy();
+            const ctxTrend = document.getElementById('chart-shipper-trend').getContext('2d');
+            chartShipperTrend = new Chart(ctxTrend, {
+                type: 'line',
+                data: {
+                    labels: sortedMonths,
+                    datasets: [{
+                        label: 'Monthly Spending (₹)',
+                        data: trendSpends,
+                        borderColor: '#f59e0b',
+                        backgroundColor: 'rgba(245, 158, 11, 0.05)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.35,
+                        pointBackgroundColor: '#fbbf24',
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.05)' } },
+                        y: { ticks: { color: '#94a3b8', callback: val => '₹' + val.toLocaleString('en-IN') }, grid: { color: 'rgba(148, 163, 184, 0.08)' } }
+                    }
+                }
+            });
+
+            // 4. Vehicle Type Utilization
+            const vehicleData = {};
+            finalShipments.forEach(s => {
+                const v = s.vehicle_type || 'Unknown';
+                if (!vehicleData[v]) vehicleData[v] = { count: 0, spend: 0, countWithSpend: 0 };
+                vehicleData[v].count++;
+                if (s.winning_bid_amount && s.status !== 'cancelled') {
+                    vehicleData[v].spend += Number(s.winning_bid_amount);
+                    vehicleData[v].countWithSpend++;
+                }
+            });
+
+            const vLabels = Object.keys(vehicleData).sort();
+            const vCounts = vLabels.map(l => vehicleData[l].count);
+            const vAvgs = vLabels.map(l => vehicleData[l].countWithSpend > 0 ? Math.round(vehicleData[l].spend / vehicleData[l].countWithSpend) : 0);
+
+            if (chartShipperVehicles) chartShipperVehicles.destroy();
+            const ctxVehicles = document.getElementById('chart-shipper-vehicles').getContext('2d');
+            chartShipperVehicles = new Chart(ctxVehicles, {
+                type: 'bar',
+                data: {
+                    labels: vLabels,
+                    datasets: [
+                        {
+                            label: 'Trips Placed',
+                            data: vCounts,
+                            backgroundColor: 'rgba(139, 92, 246, 0.65)',
+                            borderColor: '#8b5cf6',
+                            borderWidth: 1.5,
+                            yAxisID: 'y-count'
+                        },
+                        {
+                            label: 'Avg Cost / Trip (₹)',
+                            data: vAvgs,
+                            backgroundColor: 'rgba(245, 158, 11, 0.65)',
+                            borderColor: '#f59e0b',
+                            borderWidth: 1.5,
+                            yAxisID: 'y-cost'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8', font: { family: 'Inter' } } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.08)' } },
+                        'y-count': {
+                            type: 'linear',
+                            position: 'left',
+                            ticks: { color: '#94a3b8', precision: 0 },
+                            grid: { color: 'rgba(148, 163, 184, 0.08)' }
+                        },
+                        'y-cost': {
+                            type: 'linear',
+                            position: 'right',
+                            ticks: { color: '#94a3b8', callback: val => '₹' + val.toLocaleString('en-IN') },
+                            grid: { drawOnChartArea: false }
+                        }
+                    }
+                }
+            });
         }
     </script>
 </body>

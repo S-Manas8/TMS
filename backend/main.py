@@ -40,6 +40,10 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE shipments ADD COLUMN num_trucks INTEGER DEFAULT 1"))
     except Exception:
         pass
+    try:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN assigned_at DATETIME"))
+    except Exception:
+        pass
     # POD & proof request migrations
     try:
         conn.execute(text("ALTER TABLE pods ADD COLUMN dest_id TEXT"))
@@ -145,6 +149,14 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE payments ADD COLUMN paid_at DATETIME"))
     except Exception:
         pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN driver_fee FLOAT"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payments ADD COLUMN shipper_refund FLOAT"))
+    except Exception:
+        pass
 
 # Fix old 'succeeded' payments on non-delivered shipments → escrow_held
 with engine.begin() as conn:
@@ -153,6 +165,25 @@ with engine.begin() as conn:
         WHERE status = 'succeeded'
         AND shipment_id IN (
             SELECT id FROM shipments WHERE status NOT IN ('delivered')
+        )
+    """))
+    # Create cancellation_records table if not exists
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS cancellation_records (
+            id TEXT PRIMARY KEY,
+            shipment_id TEXT NOT NULL,
+            shipper_id TEXT NOT NULL,
+            driver_id TEXT,
+            reason TEXT NOT NULL,
+            scenario TEXT NOT NULL,
+            trip_amount FLOAT DEFAULT 0,
+            driver_fee FLOAT DEFAULT 0,
+            shipper_refund FLOAT DEFAULT 0,
+            km_travelled FLOAT,
+            total_route_km FLOAT,
+            completed_stops INTEGER,
+            total_stops INTEGER,
+            cancelled_at DATETIME
         )
     """))
 

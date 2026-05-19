@@ -14,13 +14,14 @@ let myBidsMap    = {};   // shipment_id → amount
 
 // ── Tab switching ─────────────────────────────────────────────
 function switchTab(tab) {
-    ['loads','bids','trips','rating'].forEach(t => {
+    ['loads','bids','trips','rating','analytics'].forEach(t => {
         document.getElementById('tabn-' + t).classList.toggle('active', t === tab);
         document.getElementById('pane-' + t).classList.toggle('active', t === tab);
     });
     // Refresh data when switching tabs so cancelled/updated items appear immediately
     if (tab === 'loads') loadOpenLoads();
     if (tab === 'bids')  loadMyActiveBids();
+    if (tab === 'analytics') loadDriverAnalytics();
     // Invalidate map when trips tab becomes visible
     if (tab === 'trips' && driverMap) setTimeout(() => driverMap.invalidateSize(), 50);
 }
@@ -237,15 +238,15 @@ async function loadMyActiveBids() {
 
             const isCancelled = b.shipment_status === 'cancelled';
 
-            return `<div style="padding:14px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;border-left:3px solid ${border};${isCancelled ? 'opacity:0.55;' : ''}">
+            return `<div style="padding:14px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;border-left:3px solid ${border};">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
                     <div style="font-weight:700;font-size:0.88rem;flex:1;margin-right:8px;">${b.pickup_address} → ${b.drop_address || 'N/A'}</div>
                     <span style="font-size:0.72rem;color:${color};font-family:var(--font-mono);white-space:nowrap;font-weight:600;">${label}</span>
                 </div>
                 <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">${b.goods_desc} · ${b.weight_kg} kg · ${b.vehicle_type}</div>
                 ${isCancelled ? `
-                <div style="font-size:0.75rem;color:#6b7280;padding:6px 10px;background:rgba(100,100,100,0.08);border-radius:6px;">
-                    This load was cancelled by the shipper. Your bid has been voided.
+                <div style="font-size:0.75rem;color:#ef4444;padding:8px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:6px;font-weight:500;">
+                    ${b.driver_fee ? `This load was cancelled by the shipper. According to distance and bidded amount, you got <strong>${fmt(b.driver_fee)}</strong> as compensation.` : 'This load was cancelled by the shipper. Your bid has been voided.'}
                 </div>` : `
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
@@ -290,6 +291,7 @@ async function loadMyTrips() {
             container.innerHTML = '<div class="empty-state"><div class="icon">🏁</div><p>No assigned trips yet.</p></div>';
             document.getElementById('trip-map').style.display = 'none';
             stopTracking();
+            stopDriverTripLive();
             return;
         }
 
@@ -343,6 +345,13 @@ async function loadMyTrips() {
             }
         }
 
+        // Fetch cancellation records for cancelled trips
+        const cancelMap = {};
+        for (const t of trips.filter(t => t.status === 'cancelled')) {
+            try { cancelMap[t.id] = await getCancellationRecord(t.id); }
+            catch (e) { cancelMap[t.id] = null; }
+        }
+
         // Determine which trips should be auto-expanded
         // Active trips always open; delivered trips open only if previously open
         const shouldOpen = id => {
@@ -355,8 +364,8 @@ async function loadMyTrips() {
                 ? (t.destinations.length > 1 ? t.destinations.length + ' Stops' : t.destinations[0].address)
                 : (t.drop_address || 'N/A');
 
-            const pillClass = { assigned:'pill-assigned', in_transit:'pill-transit', delivered:'pill-delivered' };
-            const pillIcon  = { assigned:'🔵', in_transit:'🟠', delivered:'🟢' };
+            const pillClass = { assigned:'pill-assigned', in_transit:'pill-transit', delivered:'pill-delivered', cancelled:'pill-cancelled' };
+            const pillIcon  = { assigned:'🔵', in_transit:'🟠', delivered:'🟢', cancelled:'🚫' };
             const isOpen    = shouldOpen(t.id);
 
             // Payment badge for header
@@ -366,6 +375,8 @@ async function loadMyTrips() {
                 payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:var(--green);background:rgba(16,185,129,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">✅ Paid</span>`;
             } else if (pay && (pay.status === 'escrow_held' || pay.status === 'succeeded')) {
                 payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:#60a5fa;background:rgba(59,130,246,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">🔒 Secured</span>`;
+            } else if (pay && pay.status === 'cancelled_with_fee') {
+                payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:#ef4444;background:rgba(239,68,68,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">🚫 Compensated</span>`;
             } else if (t.status === 'delivered' && (!pay || pay.status === 'not_initiated')) {
                 payBadge = `<span style="font-size:0.65rem;font-family:var(--font-mono);color:#f59e0b;background:rgba(245,158,11,0.15);padding:1px 7px;border-radius:10px;margin-left:6px;">⏳ Unpaid</span>`;
             }
@@ -397,7 +408,7 @@ async function loadMyTrips() {
                     </div>
 
                     <div style="padding:14px 16px;">
-                        ${renderPaymentSection(t, paymentMap[t.id])}
+                        ${renderPaymentSection(t, paymentMap[t.id], cancelMap[t.id])}
                         ${renderProofRequestInline(t, proofMap[t.id])}
                         ${renderTripButtons(t)}
                         ${renderDriverPhotoHistory(t, photosMap[t.id] || [])}
@@ -405,6 +416,8 @@ async function loadMyTrips() {
                 </div>
             </div>`;
         }).join('');
+
+        syncDriverTripLive(trips.find(t => t.status === 'in_transit')?.id || null);
 
         // Restore open photo sections
         openSections.forEach(sectionId => {
@@ -429,7 +442,111 @@ function toggleTripCard(id) {
 }
 
 // ── Payment section inside trip card (driver view) ───────────
-function renderPaymentSection(trip, pay) {
+function renderPaymentSection(trip, pay, cancelRec) {
+    // Handle cancelled trips — show cancellation compensation
+    if (trip.status === 'cancelled') {
+        if (!cancelRec) {
+            // No cancellation record — either cancelled before record system,
+            // or cancelled before driver was assigned
+            // Check if there's a payment with cancelled_with_fee status
+            if (pay && pay.status === 'cancelled_with_fee' && pay.amount) {
+                return `
+                    <div style="margin-top:12px;padding:12px 14px;
+                                background:rgba(239,68,68,0.08);
+                                border:1px solid rgba(239,68,68,0.25);
+                                border-radius:8px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:1.2rem;">🚫</span>
+                                <div style="font-weight:700;font-size:0.9rem;color:#ef4444;">Trip Cancelled by Shipper</div>
+                            </div>
+                        </div>
+                        <div style="font-size:0.75rem;color:var(--muted);">
+                            Shipper cancelled this trip. Compensation will be processed by FreightBid.
+                        </div>
+                    </div>`;
+            }
+            return `
+                <div style="margin-top:12px;padding:12px 14px;
+                            background:rgba(100,100,100,0.08);
+                            border:1px solid rgba(100,100,100,0.2);
+                            border-radius:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:1.1rem;">🚫</span>
+                        <div style="font-weight:700;font-size:0.88rem;color:#94a3b8;">Trip Cancelled by Shipper</div>
+                    </div>
+                    <div style="font-size:0.75rem;color:var(--muted);margin-top:4px;">
+                        Cancelled before driver was assigned. No compensation applicable.
+                    </div>
+                </div>`;
+        }
+
+        const cancelDate = new Date(cancelRec.cancelled_at).toLocaleDateString('en-IN', {
+            day:'numeric', month:'short', year:'numeric'
+        });
+        const cancelTime = new Date(cancelRec.cancelled_at).toLocaleTimeString('en-IN', {
+            hour:'2-digit', minute:'2-digit'
+        });
+
+        // Build detail line based on scenario
+        let detailLine = '';
+        if (cancelRec.scenario === 'assigned_penalty') {
+            if (cancelRec.km_travelled > 0 && cancelRec.total_route_km > 0) {
+                detailLine = `You travelled ${cancelRec.km_travelled} km of ${cancelRec.total_route_km} km total route`;
+            } else {
+                detailLine = 'Compensation based on trip fare';
+            }
+        } else if (cancelRec.scenario === 'in_transit_penalty') {
+            detailLine = `${cancelRec.completed_stops || 0} of ${cancelRec.total_stops || 0} stops completed`;
+        }
+
+        const hasCompensation = cancelRec.driver_fee > 0;
+
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:${hasCompensation ? 'rgba(239,68,68,0.08)' : 'rgba(100,100,100,0.08)'};
+                        border:1px solid ${hasCompensation ? 'rgba(239,68,68,0.25)' : 'rgba(100,100,100,0.2)'};
+                        border-radius:8px;">
+                <!-- Header -->
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:1.2rem;">🚫</span>
+                        <div style="font-weight:700;font-size:0.9rem;color:#ef4444;">Trip Cancelled by Shipper</div>
+                    </div>
+                    ${hasCompensation ? `
+                    <div style="font-family:var(--font-cond);font-size:1.1rem;font-weight:700;color:#ef4444;">
+                        ${fmt(cancelRec.driver_fee)}
+                    </div>` : ''}
+                </div>
+
+                <!-- Reason -->
+                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:8px;">
+                    Reason: <strong style="color:var(--text);">${cancelRec.reason}</strong>
+                </div>
+
+                ${hasCompensation ? `
+                <!-- Compensation breakdown -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Your Compensation</div>
+                        <div style="font-weight:700;font-size:0.95rem;color:#ef4444;">${fmt(cancelRec.driver_fee)}</div>
+                        <div style="font-size:0.68rem;color:var(--muted);margin-top:2px;">${detailLine}</div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:7px 10px;">
+                        <div style="color:var(--muted);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Original Bid</div>
+                        <div style="font-weight:700;font-size:0.95rem;color:var(--muted);">${fmt(cancelRec.trip_amount)}</div>
+                    </div>
+                </div>
+                <div style="font-size:0.7rem;color:var(--muted);">
+                    Cancelled on ${cancelDate} at ${cancelTime}
+                </div>` : `
+                <div style="font-size:0.75rem;color:var(--muted);">
+                    No compensation — cancelled before trip started.
+                    Cancelled on ${cancelDate} at ${cancelTime}
+                </div>`}
+            </div>`;
+    }
+
     // Only show for trips that have been awarded
     if (!['assigned', 'in_transit', 'delivered'].includes(trip.status)) return '';
     if (!trip.winning_bid_amount) return '';
@@ -554,6 +671,27 @@ function renderPaymentSection(trip, pay) {
                             Shipper's payment attempt failed. Amount: <strong>${fmt(pay.amount)}</strong>
                         </div>
                     </div>
+                </div>
+            </div>`;
+    }
+
+    if (pay.status === 'cancelled_with_fee') {
+        return `
+            <div style="margin-top:12px;padding:12px 14px;
+                        background:rgba(239,68,68,0.08);
+                        border:1px solid rgba(239,68,68,0.25);
+                        border-radius:8px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:1.2rem;">🚫</span>
+                        <div style="font-weight:700;font-size:0.9rem;color:#ef4444;">Trip Cancelled by Shipper</div>
+                    </div>
+                    <div style="font-family:var(--font-cond);font-size:1.1rem;font-weight:700;color:#ef4444;">
+                        ${fmt(pay.driver_fee || 0)}
+                    </div>
+                </div>
+                <div style="font-size:0.72rem;color:var(--muted);">
+                    This load was cancelled by the shipper. According to distance and bidded amount, you got this amount as compensation.
                 </div>
             </div>`;
     }
@@ -732,6 +870,9 @@ function driverOpenPhoto(url, label, uploadedAt, shipperName) {
 }
 
 function renderTripButtons(trip) {
+    if (trip.status === 'cancelled') {
+        return `<div style="font-size:0.75rem;color:#ef4444;font-weight:600;text-align:center;padding:6px;background:rgba(239,68,68,0.05);border:1px dashed rgba(239,68,68,0.2);border-radius:6px;">This trip has been cancelled.</div>`;
+    }
     if (trip.status === 'assigned') {
         return `<div class="trip-status-btns"><button class="btn btn-primary btn-sm" onclick="doUpdateStatus('${trip.id}','in_transit')">🚚 Start Trip</button></div>`;
     }
@@ -860,6 +1001,115 @@ function stopTracking() {
     trackingInterval = null;
 }
 
+// ── Live WebSocket (shipper chat + trip events) ──────────────
+let driverTripWs = null;
+let driverTripWsShipmentId = null;
+let driverTripPingTimer = null;
+
+function stopDriverTripLive() {
+    if (driverTripPingTimer) {
+        clearInterval(driverTripPingTimer);
+        driverTripPingTimer = null;
+    }
+    if (driverTripWs) {
+        try { driverTripWs.close(); } catch (e) {}
+        driverTripWs = null;
+    }
+    driverTripWsShipmentId = null;
+    const panel = document.getElementById('trip-live-panel');
+    if (panel) panel.style.display = 'none';
+    const box = document.getElementById('trip-live-messages');
+    if (box) box.innerHTML = '';
+    const st = document.getElementById('trip-live-ws-status');
+    if (st) st.textContent = '';
+}
+
+function escapeHtmlDriver(s) {
+    if (s == null || s === '') return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function appendDriverLiveChat(fromRole, senderName, text, ts) {
+    const box = document.getElementById('trip-live-messages');
+    if (!box) return;
+    const whoLabel = fromRole === 'shipper' ? 'Shipper' : 'Driver';
+    box.insertAdjacentHTML('beforeend', `<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.1);">
+        <span style="font-size:0.68rem;color:var(--muted);">${escapeHtmlDriver(ts || '')}</span>
+        <div><strong>${escapeHtmlDriver(senderName || whoLabel)}</strong> <span style="color:var(--muted);font-size:0.7rem;">(${whoLabel})</span></div>
+        <div style="margin-top:2px;">${escapeHtmlDriver(text)}</div></div>`);
+    box.scrollTop = box.scrollHeight;
+}
+
+function sendTripLiveChat() {
+    if (!driverTripWs || driverTripWs.readyState !== WebSocket.OPEN) return;
+    const inp = document.getElementById('trip-live-input');
+    const text = (inp && inp.value || '').trim();
+    if (!text) return;
+    try {
+        driverTripWs.send(JSON.stringify({ type: 'chat', text: text }));
+        inp.value = '';
+    } catch (e) { console.error(e); }
+}
+
+function syncDriverTripLive(shipmentId) {
+    if (driverTripWsShipmentId === shipmentId && driverTripWs && driverTripWs.readyState === WebSocket.OPEN) {
+        if (shipmentId) {
+            const panel = document.getElementById('trip-live-panel');
+            if (panel) panel.style.display = 'block';
+        }
+        return;
+    }
+    stopDriverTripLive();
+    if (!shipmentId) return;
+    const url = getWsShipmentUrl(shipmentId);
+    if (!url) return;
+    driverTripWsShipmentId = shipmentId;
+    const panel = document.getElementById('trip-live-panel');
+    if (panel) {
+        panel.style.display = 'block';
+        const st = document.getElementById('trip-live-ws-status');
+        if (st) st.textContent = 'Connecting…';
+    }
+    try {
+        driverTripWs = new WebSocket(url);
+    } catch (e) {
+        console.error(e);
+        return;
+    }
+    driverTripWs.onopen = () => {
+        const st = document.getElementById('trip-live-ws-status');
+        if (st) st.textContent = 'Live — WebSocket connected';
+        driverTripPingTimer = setInterval(() => {
+            if (driverTripWs && driverTripWs.readyState === WebSocket.OPEN) {
+                try { driverTripWs.send(JSON.stringify({ type: 'ping' })); } catch (x) {}
+            }
+        }, 45000);
+    };
+    driverTripWs.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (x) { return; }
+        if (msg.type === 'chat') {
+            appendDriverLiveChat(msg.from_role, msg.sender_name, msg.text, msg.ts);
+        } else if (msg.type === 'shipment_status') {
+            showToast('Trip status updated: ' + msg.status, 'success');
+            loadMyTrips();
+        }
+    };
+    driverTripWs.onerror = () => {
+        const st = document.getElementById('trip-live-ws-status');
+        if (st) st.textContent = 'Connection error';
+    };
+    driverTripWs.onclose = () => {
+        if (driverTripPingTimer) {
+            clearInterval(driverTripPingTimer);
+            driverTripPingTimer = null;
+        }
+        driverTripWs = null;
+    };
+}
+
 // ── My Rating ─────────────────────────────────────────────────
 async function loadMyRating() {
     const box = document.getElementById('my-rating-box');
@@ -928,8 +1178,7 @@ async function refreshTripStats() {
         document.getElementById('stat-done').textContent   = completed;
 
         // Check proof requests for in-transit trips without re-rendering
-        for (const t of trips.filter(t => t.status === 'in_transit')) {
-            try {
+        for (const t of trips.filter(t => t.status === 'in_transit')) {            try {
                 const reqs    = await getProofRequests(t.id);
                 const pending = reqs.find(r => r.status === 'pending');
                 if (pending && pending.request_id !== activeProofRequestId) {
@@ -945,6 +1194,7 @@ async function refreshTripStats() {
             } catch (e) { /* silent */ }
 
             // Check if any photos were rejected — auto-open photo section so driver sees it
+            // Skip cancelled trips — no point alerting about photos on cancelled shipments
             try {
                 const photos   = await getShipmentPhotos(t.id);
                 const rejected = photos.some(p => p.ack_status === 'rejected');
@@ -1216,4 +1466,265 @@ function showToast(message, type = 'success') {
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3500);
+}
+
+// ── Driver Analytics & Insights ───────────────────────────────
+let chartDriverEarnings = null;
+let chartDriverCategories = null;
+let chartDriverVehicles = null;
+let chartDriverTrips = null;
+
+function renderDriverAnalytics() {
+    loadDriverAnalytics();
+}
+
+async function loadDriverAnalytics() {
+    const timeframe = document.getElementById("driver-timeframe").value;
+    try {
+        const trips = await getMyShipments();
+
+        // Timeframe filtering
+        let filtered = trips;
+        const now = new Date();
+        if (timeframe !== 'all') {
+            const daysLimit = parseInt(timeframe);
+            const limitDate = new Date(now.getTime() - daysLimit * 24 * 60 * 60 * 1000);
+            filtered = filtered.filter(t => new Date(t.created_at) >= limitDate);
+        }
+
+        // Compute Driver KPIs
+        let totalEarnings = 0;
+        let escrowAmount = 0;
+        let totalWeight = 0;
+        let completedCount = 0;
+
+        filtered.forEach(t => {
+            if (t.status === 'delivered') {
+                totalEarnings += Number(t.winning_bid_amount) || 0;
+                totalWeight += Number(t.weight_kg) || 0;
+                completedCount++;
+            } else if (t.status === 'cancelled') {
+                totalEarnings += Number(t.driver_fee) || 0;
+            } else if (['assigned', 'in_transit'].includes(t.status)) {
+                escrowAmount += Number(t.winning_bid_amount) || 0;
+            }
+        });
+
+        document.getElementById("dr-kpi-earnings").textContent = "₹" + totalEarnings.toLocaleString('en-IN');
+        document.getElementById("dr-kpi-escrow").textContent = "₹" + escrowAmount.toLocaleString('en-IN');
+        document.getElementById("dr-kpi-weight").textContent = totalWeight >= 1000 
+            ? (totalWeight / 1000).toFixed(1) + " tons" 
+            : totalWeight.toLocaleString('en-IN') + " kg";
+        document.getElementById("dr-kpi-trips").textContent = completedCount;
+
+        // Categorized goods analysis
+        const categories = {};
+        filtered.forEach(t => {
+            const cat = categorizeGoods(t.goods_desc);
+            if (!categories[cat]) {
+                categories[cat] = { count: 0, earnings: 0, weight: 0, completed: 0 };
+            }
+            categories[cat].count++;
+            if (t.status === 'delivered') {
+                categories[cat].earnings += Number(t.winning_bid_amount) || 0;
+                categories[cat].weight += Number(t.weight_kg) || 0;
+                categories[cat].completed++;
+            } else if (t.status === 'cancelled') {
+                categories[cat].earnings += Number(t.driver_fee) || 0;
+            }
+        });
+
+        const catLabels = Object.keys(categories).sort();
+        const catEarnings = catLabels.map(l => categories[l].earnings);
+        const catCompletions = catLabels.map(l => categories[l].completed);
+        const catWeights = catLabels.map(l => categories[l].weight);
+
+        // Fill Table
+        const tableBody = document.querySelector("#table-driver-categories tbody");
+        if (tableBody) {
+            if (catLabels.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;">No trip performance data available.</td></tr>`;
+            } else {
+                tableBody.innerHTML = catLabels.map(l => {
+                    const data = categories[l];
+                    const avg = data.completed > 0 ? Math.round(data.earnings / data.completed) : 0;
+                    return `<tr style="border-bottom:1px solid var(--border);">
+                        <td style="padding:10px 12px;"><strong>${l}</strong></td>
+                        <td style="padding:10px 12px;">${data.completed}</td>
+                        <td style="padding:10px 12px;">₹${data.earnings.toLocaleString('en-IN')}</td>
+                        <td style="padding:10px 12px;">${avg > 0 ? '₹' + avg.toLocaleString('en-IN') : '—'}</td>
+                        <td style="padding:10px 12px;">${data.weight.toLocaleString('en-IN')} kg</td>
+                    </tr>`;
+                }).join('');
+            }
+        }
+
+        // Helper function (client-side matching)
+        function categorizeGoods(desc) {
+            if (!desc) return "Other";
+            const d = desc.toLowerCase().trim();
+            if (d.includes("electr") || d.includes("phone") || d.includes("tv") || d.includes("computer") || d.includes("gadget") || d.includes("appliances")) return "Electronics";
+            if (d.includes("food") || d.includes("veget") || d.includes("fruit") || d.includes("grain") || d.includes("grocery") || d.includes("milk") || d.includes("beverag") || d.includes("meat") || d.includes("perish")) return "Food & Perishables";
+            if (d.includes("furnit") || d.includes("wood") || d.includes("table") || d.includes("chair") || d.includes("bed") || d.includes("desk")) return "Furniture";
+            if (d.includes("chem") || d.includes("pharma") || d.includes("drug") || d.includes("med") || d.includes("acid") || d.includes("fertiliz")) return "Chemicals & Pharma";
+            if (d.includes("steel") || d.includes("metal") || d.includes("iron") || d.includes("cement") || d.includes("brick") || d.includes("construct") || d.includes("pip") || d.includes("sand") || d.includes("industrial")) return "Industrial & Metal";
+            if (d.includes("cloth") || d.includes("textil") || d.includes("garment") || d.includes("apparel") || d.includes("shoe") || d.includes("fabric")) return "Apparel & Textiles";
+            if (d.includes("paper") || d.includes("book") || d.includes("cardboard") || d.includes("station")) return "Paper & Print";
+            if (d.includes("car") || d.includes("auto") || d.includes("motor") || d.includes("part") || d.includes("wheel") || d.includes("tyre")) return "Automotive";
+            if (d.includes("pack") || d.includes("box") || d.includes("carton") || d.includes("bag") || d.includes("container") || d.includes("logistics")) return "Packaged Goods";
+            return "Other";
+        }
+
+        // Charts
+        // 1. Earnings Trend
+        const monthlyEarnings = {};
+        filtered.forEach(t => {
+            let val = 0;
+            if (t.status === 'delivered') val = Number(t.winning_bid_amount) || 0;
+            else if (t.status === 'cancelled') val = Number(t.driver_fee) || 0;
+
+            if (val > 0) {
+                const date = new Date(t.created_at);
+                const key = date.toLocaleString('default', { month: 'short', year: 'numeric' });
+                if (!monthlyEarnings[key]) monthlyEarnings[key] = { amount: 0, dateObj: date };
+                monthlyEarnings[key].amount += val;
+            }
+        });
+        const sortedMonths = Object.keys(monthlyEarnings).sort((a,b) => monthlyEarnings[a].dateObj - monthlyEarnings[b].dateObj);
+        const trendValues = sortedMonths.map(m => monthlyEarnings[m].amount);
+
+        if (chartDriverEarnings) chartDriverEarnings.destroy();
+        const ctxEarn = document.getElementById("chart-driver-earnings").getContext("2d");
+        chartDriverEarnings = new Chart(ctxEarn, {
+            type: 'line',
+            data: {
+                labels: sortedMonths,
+                datasets: [{
+                    label: 'Earnings (₹)',
+                    data: trendValues,
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.35,
+                    pointBackgroundColor: '#34d399',
+                    pointRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.05)' } },
+                    y: { ticks: { color: '#94a3b8', callback: v => '₹' + v.toLocaleString('en-IN') }, grid: { color: 'rgba(148, 163, 184, 0.08)' } }
+                }
+            }
+        });
+
+        // 2. Haulage Categories
+        if (chartDriverCategories) chartDriverCategories.destroy();
+        const ctxCat = document.getElementById("chart-driver-categories").getContext("2d");
+        chartDriverCategories = new Chart(ctxCat, {
+            type: 'doughnut',
+            data: {
+                labels: catLabels,
+                datasets: [{
+                    data: catCompletions,
+                    backgroundColor: [
+                        'rgba(16, 185, 129, 0.7)',
+                        'rgba(59, 130, 246, 0.7)',
+                        'rgba(245, 158, 11, 0.7)',
+                        'rgba(139, 92, 246, 0.7)',
+                        'rgba(239, 68, 68, 0.7)',
+                        'rgba(20, 184, 166, 0.7)',
+                        'rgba(100, 116, 139, 0.7)'
+                    ],
+                    borderWidth: 1,
+                    borderColor: '#1b2330'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { color: '#94a3b8', font: { family: 'Inter', size: 10 } } }
+                }
+            }
+        });
+
+        // 3. Earnings by Vehicle Type
+        const vehicleStats = {};
+        filtered.forEach(t => {
+            const v = t.vehicle_type || 'Unknown';
+            if (!vehicleStats[v]) vehicleStats[v] = { count: 0, earnings: 0 };
+            vehicleStats[v].count++;
+            if (t.status === 'delivered') vehicleStats[v].earnings += Number(t.winning_bid_amount) || 0;
+            else if (t.status === 'cancelled') vehicleStats[v].earnings += Number(t.driver_fee) || 0;
+        });
+        const vLabels = Object.keys(vehicleStats).sort();
+        const vEarnings = vLabels.map(l => vehicleStats[l].earnings);
+
+        if (chartDriverVehicles) chartDriverVehicles.destroy();
+        const ctxVeh = document.getElementById("chart-driver-vehicles").getContext("2d");
+        chartDriverVehicles = new Chart(ctxVeh, {
+            type: 'bar',
+            data: {
+                labels: vLabels,
+                datasets: [{
+                    label: 'Earnings by Vehicle Type (₹)',
+                    data: vEarnings,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: '#3b82f6',
+                    borderWidth: 1.5
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.05)' } },
+                    y: { ticks: { color: '#94a3b8', callback: v => '₹' + v.toLocaleString('en-IN') }, grid: { color: 'rgba(148, 163, 184, 0.08)' } }
+                }
+            }
+        });
+
+        // 4. Trip Status Distribution
+        const statuses = { delivered: 0, assigned: 0, in_transit: 0, cancelled: 0 };
+        filtered.forEach(t => {
+            if (statuses[t.status] !== undefined) statuses[t.status]++;
+        });
+
+        if (chartDriverTrips) chartDriverTrips.destroy();
+        const ctxTrips = document.getElementById("chart-driver-trips").getContext("2d");
+        chartDriverTrips = new Chart(ctxTrips, {
+            type: 'doughnut',
+            data: {
+                labels: ['Completed', 'Assigned', 'In Transit', 'Cancelled'],
+                datasets: [{
+                    data: [statuses.delivered, statuses.assigned, statuses.in_transit, statuses.cancelled],
+                    backgroundColor: [
+                        'rgba(16, 185, 129, 0.7)',  // Green
+                        'rgba(59, 130, 246, 0.7)',  // Blue
+                        'rgba(245, 158, 11, 0.7)',  // Orange
+                        'rgba(239, 68, 68, 0.7)'    // Red
+                    ],
+                    borderWidth: 1,
+                    borderColor: '#1b2330'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { color: '#94a3b8', font: { family: 'Inter', size: 10 } } }
+                }
+            }
+        });
+
+    } catch (e) {
+        console.error(e);
+        document.getElementById("table-driver-categories").innerHTML = `<div class="alert alert-error">Failed to load analytics: ${e.message}</div>`;
+    }
 }
