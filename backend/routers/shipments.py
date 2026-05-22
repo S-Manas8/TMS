@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from database import get_db
-from models import Shipment, User, Bid, Rating, ShipmentDestination, Payment, TrackingEvent, CancellationRecord
-from auth_utils import get_current_user
+from ..database import get_db
+from ..models import Shipment, User, Bid, Rating, ShipmentDestination, Payment, TrackingEvent, CancellationRecord, DestinationChangeRequest
+from ..auth_utils import get_current_user
 import datetime
 import math
 
@@ -153,6 +153,11 @@ def get_my_shipments(
     for s in shipments:
         bids = db.query(Bid).filter(Bid.shipment_id == s.id).all()
         dests = db.query(ShipmentDestination).filter(ShipmentDestination.shipment_id == s.id).order_by(ShipmentDestination.order_index).all()
+        assigned_driver = None
+        if s.assigned_driver_id:
+            d = db.query(User).filter(User.id == s.assigned_driver_id).first()
+            if d:
+                assigned_driver = {"id": d.id, "name": d.name, "phone": d.phone}
         
         payment = db.query(Payment).filter(Payment.shipment_id == s.id).order_by(Payment.created_at.desc()).first()
         driver_fee = payment.driver_fee if (payment and payment.status == "cancelled_with_fee") else None
@@ -174,9 +179,29 @@ def get_my_shipments(
             "started_at": s.started_at.isoformat() if s.started_at else None,
             "delivered_at": s.delivered_at.isoformat() if s.delivered_at else None,
             "winning_bid_amount": s.winning_bid_amount,
+            "assigned_driver": assigned_driver,
             "driver_fee": driver_fee,
             "shipper_refund": shipper_refund,
-            "destinations": [{"id": d.id, "address": d.address, "lat": d.lat, "lng": d.lng, "status": d.status, "order_index": d.order_index, "ack_status": d.ack_status} for d in dests],
+            "destinations": [
+            {
+                "id": d.id,
+                "address": d.address,
+                "lat": d.lat,
+                "lng": d.lng,
+                "status": d.status,
+                "order_index": d.order_index,
+                "ack_status": d.ack_status,
+                "pending_change": next(
+                    ({"new_address": r.new_address, "new_lat": r.new_lat, "new_lng": r.new_lng, "request_id": r.id}
+                     for r in db.query(DestinationChangeRequest).filter(
+                         DestinationChangeRequest.dest_id == d.id,
+                         DestinationChangeRequest.status == "pending"
+                     ).all()),
+                    None
+                )
+            }
+            for d in dests
+        ],
             "bids": [
                 {
                     "id": b.id,
@@ -281,7 +306,7 @@ def get_shipment(
     if s.assigned_driver_id:
         d = db.query(User).filter(User.id == s.assigned_driver_id).first()
         if d:
-            driver = {"name": d.name, "phone": d.phone}
+            driver = {"id": d.id, "name": d.name, "phone": d.phone}
 
     rating = db.query(Rating).filter(Rating.shipment_id == s.id).first()
     shipper_rating = rating.score if rating else None
@@ -291,6 +316,10 @@ def get_shipment(
     payment = db.query(Payment).filter(Payment.shipment_id == s.id).order_by(Payment.created_at.desc()).first()
     driver_fee = payment.driver_fee if (payment and payment.status == "cancelled_with_fee") else None
     shipper_refund = payment.shipper_refund if (payment and payment.status == "cancelled_with_fee") else None
+
+    change_reqs = db.query(DestinationChangeRequest).filter(
+        DestinationChangeRequest.shipment_id == s.id
+    ).all()
 
     return {
         "id": s.id,
@@ -312,7 +341,38 @@ def get_shipment(
         "shipper_refund": shipper_refund,
         "assigned_driver": driver,
         "shipper_rating": shipper_rating,
-        "destinations": [{"id": d.id, "address": d.address, "lat": d.lat, "lng": d.lng, "status": d.status, "order_index": d.order_index, "ack_status": d.ack_status} for d in dests],
+        "destinations": [
+            {
+                "id": d.id,
+                "address": d.address,
+                "lat": d.lat,
+                "lng": d.lng,
+                "status": d.status,
+                "order_index": d.order_index,
+                "ack_status": d.ack_status,
+                "pending_change": next(
+                    ({"new_address": r.new_address, "new_lat": r.new_lat, "new_lng": r.new_lng, "request_id": r.id}
+                     for r in db.query(DestinationChangeRequest).filter(
+                         DestinationChangeRequest.dest_id == d.id,
+                         DestinationChangeRequest.status == "pending"
+                     ).all()),
+                    None
+                )
+            }
+            for d in dests
+        ],
+        "destination_change_requests": [
+            {
+                "id": cr.id,
+                "dest_id": cr.dest_id,
+                "new_address": cr.new_address,
+                "new_lat": cr.new_lat,
+                "new_lng": cr.new_lng,
+                "status": cr.status,
+                "created_at": cr.created_at.isoformat() if cr.created_at else None
+            }
+            for cr in change_reqs
+        ],
         "bids": [
             {
                 "id": b.id,
@@ -842,6 +902,234 @@ def get_cancellation_record(
         "driver_name":     driver.name if driver else None,
         "driver_phone":    driver.phone if driver else None,
     }
+
+@router.post("/{shipment_id}/destinations/{dest_id}/change-request")
+async def request_destination_change(
+    shipment_id: str,
+    dest_id: str,
+    data: dict,
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """
+    Shipper requests a destination address change while trip is in_transit.
+    Body: { new_address, new_lat (optional), new_lng (optional) }
+    Driver must accept or reject. If rejected, trip ends at original stop.
+    """
+    user = get_current_user(authorization)
+    if user["role"] != "shipper":
+        raise HTTPException(403, "Only shippers can request destination changes")
+
+    s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not s:
+        raise HTTPException(404, "Shipment not found")
+    if s.shipper_id != user["sub"]:
+        raise HTTPException(403, "Not your shipment")
+    if s.status != "in_transit":
+        raise HTTPException(400, "Can only change destination while shipment is in transit")
+
+    dest = db.query(ShipmentDestination).filter(
+        ShipmentDestination.id == dest_id,
+        ShipmentDestination.shipment_id == shipment_id
+    ).first()
+    if not dest:
+        raise HTTPException(404, "Destination not found")
+    if dest.status == "delivered":
+        raise HTTPException(400, "This stop is already delivered — cannot change it")
+
+    new_address = (data.get("new_address") or "").strip()
+    if not new_address:
+        raise HTTPException(400, "new_address is required")
+
+    # Cancel any existing pending request for this dest
+    db.query(DestinationChangeRequest).filter(
+        DestinationChangeRequest.dest_id == dest_id,
+        DestinationChangeRequest.status == "pending"
+    ).delete()
+
+    req = DestinationChangeRequest(
+        shipment_id = shipment_id,
+        dest_id     = dest_id,
+        shipper_id  = user["sub"],
+        driver_id   = s.assigned_driver_id,
+        new_address = new_address,
+        new_lat     = data.get("new_lat"),
+        new_lng     = data.get("new_lng"),
+        status      = "pending"
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    # Broadcast destination change requested via WebSocket
+    try:
+        from ws_manager import broadcast_shipment
+        await broadcast_shipment(shipment_id, {
+            "type": "shipment_status",
+            "shipment_id": shipment_id,
+            "status": s.status,
+            "event": "destination_change_requested",
+            "dest_id": dest_id,
+            "new_address": new_address
+        })
+    except Exception as e:
+        print(f"Failed to broadcast destination change request: {e}")
+
+    return {
+        "message":     "Destination change request sent to driver",
+        "request_id":  req.id,
+        "new_address": new_address,
+        "dest_id":     dest_id
+    }
+
+
+@router.post("/{shipment_id}/destinations/{dest_id}/change-request/respond")
+async def respond_destination_change(
+    shipment_id: str,
+    dest_id: str,
+    data: dict,
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """
+    Driver accepts or rejects a destination change request.
+    Body: { action: "accepted" | "rejected" }
+
+    If accepted: destination address is updated, trip continues to new location.
+    If rejected: destination is marked delivered at original location,
+                 all subsequent stops are removed, trip ends after this stop.
+    """
+    user = get_current_user(authorization)
+    if user["role"] != "driver":
+        raise HTTPException(403, "Only drivers can respond to destination changes")
+
+    s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not s or s.assigned_driver_id != user["sub"]:
+        raise HTTPException(403, "Not assigned to this shipment")
+
+    req = db.query(DestinationChangeRequest).filter(
+        DestinationChangeRequest.dest_id    == dest_id,
+        DestinationChangeRequest.shipment_id == shipment_id,
+        DestinationChangeRequest.status     == "pending"
+    ).first()
+    if not req:
+        raise HTTPException(404, "No pending change request for this destination")
+
+    action = data.get("action", "").strip()
+    if action not in ("accepted", "rejected"):
+        raise HTTPException(400, "action must be 'accepted' or 'rejected'")
+
+    req.status      = action
+    req.responded_at = datetime.datetime.utcnow()
+
+    dest = db.query(ShipmentDestination).filter(
+        ShipmentDestination.id == dest_id
+    ).first()
+
+    if action == "accepted":
+        # Update the destination address
+        dest.address = req.new_address
+        if req.new_lat is not None:
+            dest.lat = req.new_lat
+        if req.new_lng is not None:
+            dest.lng = req.new_lng
+
+        # If it's the last stop in the sorted list, update shipment's drop_address
+        all_dests = db.query(ShipmentDestination).filter(
+            ShipmentDestination.shipment_id == shipment_id
+        ).order_by(ShipmentDestination.order_index).all()
+        if all_dests and all_dests[-1].id == dest.id:
+            s.drop_address = req.new_address
+
+        db.commit()
+
+        # Broadcast destination change accepted via WebSocket
+        try:
+            from ws_manager import broadcast_shipment
+            await broadcast_shipment(shipment_id, {
+                "type": "shipment_status",
+                "shipment_id": shipment_id,
+                "status": s.status,
+                "event": "destination_change_accepted",
+                "dest_id": dest_id,
+                "new_address": req.new_address
+            })
+        except Exception as e:
+            print(f"Failed to broadcast destination change response (accepted): {e}")
+
+        return {
+            "message":     "Destination updated. Continue to new location.",
+            "new_address": req.new_address
+        }
+
+    else:  # rejected
+        # Remove all subsequent pending stops
+        all_dests = db.query(ShipmentDestination).filter(
+            ShipmentDestination.shipment_id == shipment_id
+        ).order_by(ShipmentDestination.order_index).all()
+
+        for d in all_dests:
+            if d.order_index > dest.order_index and d.status == "pending":
+                db.delete(d)
+
+        # Update shipment's drop_address to the current (now final) stop's address
+        s.drop_address = dest.address
+
+        db.commit()
+
+        # Broadcast destination change rejected via WebSocket
+        try:
+            from ws_manager import broadcast_shipment
+            await broadcast_shipment(shipment_id, {
+                "type": "shipment_status",
+                "shipment_id": shipment_id,
+                "status": s.status,
+                "event": "destination_change_rejected",
+                "dest_id": dest_id
+            })
+        except Exception as e:
+            print(f"Failed to broadcast destination change response (rejected): {e}")
+
+        return {
+            "message": "Destination change rejected. Please deliver goods at the original location."
+        }
+
+
+@router.get("/{shipment_id}/destinations/{dest_id}/change-request")
+def get_pending_change_request(
+    shipment_id: str,
+    dest_id: str,
+    db: Session = Depends(get_db),
+    authorization: str = Header(None)
+):
+    """Get pending destination change request for a stop (driver polls this)."""
+    user = get_current_user(authorization)
+
+    s = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not s:
+        raise HTTPException(404, "Shipment not found")
+    if user["role"] == "driver" and s.assigned_driver_id != user["sub"]:
+        raise HTTPException(403, "Not assigned to this shipment")
+    if user["role"] == "shipper" and s.shipper_id != user["sub"]:
+        raise HTTPException(403, "Not your shipment")
+
+    req = db.query(DestinationChangeRequest).filter(
+        DestinationChangeRequest.dest_id     == dest_id,
+        DestinationChangeRequest.shipment_id == shipment_id,
+        DestinationChangeRequest.status      == "pending"
+    ).first()
+
+    if not req:
+        return None
+
+    return {
+        "request_id":  req.id,
+        "new_address": req.new_address,
+        "new_lat":     req.new_lat,
+        "new_lng":     req.new_lng,
+        "created_at":  req.created_at.isoformat()
+    }
+
 
 @router.post("/{shipment_id}/abandon")
 def abandon_shipment(

@@ -15,9 +15,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import POD, ProofRequest, Shipment, ShipmentDestination, User, Complaint
-from auth_utils import get_current_user
+from ..database import get_db
+from ..models import POD, ProofRequest, Shipment, ShipmentDestination, User, Complaint
+from ..auth_utils import get_current_user
 
 router = APIRouter()
 

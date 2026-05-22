@@ -263,7 +263,10 @@ async function loadMyActiveBids() {
                         <div style="font-size:0.82rem;font-weight:600;">${fmt(b.winning_bid_amount)}</div>
                     </div>` : ''}
                 </div>`}
-                <div style="font-size:0.7rem;color:var(--muted);margin-top:8px;font-family:var(--font-mono);">Placed ${timeAgo(b.placed_at)}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid rgba(148,163,184,0.05);">
+                    <div style="font-size:0.7rem;color:var(--muted);font-family:var(--font-mono);">Placed ${timeAgo(b.placed_at)}</div>
+                    ${!isCancelled ? `<span style="font-size:0.72rem;color:var(--muted);">Open shipment to chat</span>` : ''}
+                </div>
             </div>`;
         }).join('');
     } catch (err) {
@@ -291,7 +294,6 @@ async function loadMyTrips() {
             container.innerHTML = '<div class="empty-state"><div class="icon">🏁</div><p>No assigned trips yet.</p></div>';
             document.getElementById('trip-map').style.display = 'none';
             stopTracking();
-            stopDriverTripLive();
             return;
         }
 
@@ -394,6 +396,13 @@ async function loadMyTrips() {
                         <div style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.pickup_address} → ${dest}</div>
                         <div style="font-size:0.75rem;color:var(--muted);margin-top:2px;">📦 ${t.goods_desc} · ⚖️ ${t.weight_kg} kg · 🚛 ${t.vehicle_type}</div>
                     </div>
+                    ${['assigned','in_transit'].includes(t.status) ? `
+                    <button class="btn btn-outline btn-sm"
+                            title="Open chat"
+                            onclick="event.stopPropagation();openDriverChatWidget('${t.id}', 'Chat: ${t.pickup_address.split(',')[0]} → ${t.destinations && t.destinations.length > 0 ? t.destinations[0].address : t.drop_address || 'Stop'}')"
+                            style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:8px;margin-left:10px;flex-shrink:0;">
+                        💬
+                    </button>` : ''}
                     <span id="trip-arrow-${t.id}" style="font-size:0.8rem;color:var(--muted);margin-left:12px;flex-shrink:0;transition:transform 0.2s;${isOpen ? 'transform:rotate(180deg)' : ''}">▼</span>
                 </div>
 
@@ -416,8 +425,6 @@ async function loadMyTrips() {
                 </div>
             </div>`;
         }).join('');
-
-        syncDriverTripLive(trips.find(t => t.status === 'in_transit')?.id || null);
 
         // Restore open photo sections
         openSections.forEach(sectionId => {
@@ -1001,29 +1008,6 @@ function stopTracking() {
     trackingInterval = null;
 }
 
-// ── Live WebSocket (shipper chat + trip events) ──────────────
-let driverTripWs = null;
-let driverTripWsShipmentId = null;
-let driverTripPingTimer = null;
-
-function stopDriverTripLive() {
-    if (driverTripPingTimer) {
-        clearInterval(driverTripPingTimer);
-        driverTripPingTimer = null;
-    }
-    if (driverTripWs) {
-        try { driverTripWs.close(); } catch (e) {}
-        driverTripWs = null;
-    }
-    driverTripWsShipmentId = null;
-    const panel = document.getElementById('trip-live-panel');
-    if (panel) panel.style.display = 'none';
-    const box = document.getElementById('trip-live-messages');
-    if (box) box.innerHTML = '';
-    const st = document.getElementById('trip-live-ws-status');
-    if (st) st.textContent = '';
-}
-
 function escapeHtmlDriver(s) {
     if (s == null || s === '') return '';
     const d = document.createElement('div');
@@ -1031,84 +1015,22 @@ function escapeHtmlDriver(s) {
     return d.innerHTML;
 }
 
-function appendDriverLiveChat(fromRole, senderName, text, ts) {
-    const box = document.getElementById('trip-live-messages');
-    if (!box) return;
-    const whoLabel = fromRole === 'shipper' ? 'Shipper' : 'Driver';
-    box.insertAdjacentHTML('beforeend', `<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.1);">
-        <span style="font-size:0.68rem;color:var(--muted);">${escapeHtmlDriver(ts || '')}</span>
-        <div><strong>${escapeHtmlDriver(senderName || whoLabel)}</strong> <span style="color:var(--muted);font-size:0.7rem;">(${whoLabel})</span></div>
-        <div style="margin-top:2px;">${escapeHtmlDriver(text)}</div></div>`);
-    box.scrollTop = box.scrollHeight;
-}
-
-function sendTripLiveChat() {
-    if (!driverTripWs || driverTripWs.readyState !== WebSocket.OPEN) return;
-    const inp = document.getElementById('trip-live-input');
-    const text = (inp && inp.value || '').trim();
-    if (!text) return;
+function formatChatTimestampDriver(ts) {
+    if (!ts) return '';
     try {
-        driverTripWs.send(JSON.stringify({ type: 'chat', text: text }));
-        inp.value = '';
-    } catch (e) { console.error(e); }
-}
-
-function syncDriverTripLive(shipmentId) {
-    if (driverTripWsShipmentId === shipmentId && driverTripWs && driverTripWs.readyState === WebSocket.OPEN) {
-        if (shipmentId) {
-            const panel = document.getElementById('trip-live-panel');
-            if (panel) panel.style.display = 'block';
-        }
-        return;
-    }
-    stopDriverTripLive();
-    if (!shipmentId) return;
-    const url = getWsShipmentUrl(shipmentId);
-    if (!url) return;
-    driverTripWsShipmentId = shipmentId;
-    const panel = document.getElementById('trip-live-panel');
-    if (panel) {
-        panel.style.display = 'block';
-        const st = document.getElementById('trip-live-ws-status');
-        if (st) st.textContent = 'Connecting…';
-    }
-    try {
-        driverTripWs = new WebSocket(url);
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return ts;
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     } catch (e) {
-        console.error(e);
-        return;
+        return ts;
     }
-    driverTripWs.onopen = () => {
-        const st = document.getElementById('trip-live-ws-status');
-        if (st) st.textContent = 'Live — WebSocket connected';
-        driverTripPingTimer = setInterval(() => {
-            if (driverTripWs && driverTripWs.readyState === WebSocket.OPEN) {
-                try { driverTripWs.send(JSON.stringify({ type: 'ping' })); } catch (x) {}
-            }
-        }, 45000);
-    };
-    driverTripWs.onmessage = (ev) => {
-        let msg;
-        try { msg = JSON.parse(ev.data); } catch (x) { return; }
-        if (msg.type === 'chat') {
-            appendDriverLiveChat(msg.from_role, msg.sender_name, msg.text, msg.ts);
-        } else if (msg.type === 'shipment_status') {
-            showToast('Trip status updated: ' + msg.status, 'success');
-            loadMyTrips();
-        }
-    };
-    driverTripWs.onerror = () => {
-        const st = document.getElementById('trip-live-ws-status');
-        if (st) st.textContent = 'Connection error';
-    };
-    driverTripWs.onclose = () => {
-        if (driverTripPingTimer) {
-            clearInterval(driverTripPingTimer);
-            driverTripPingTimer = null;
-        }
-        driverTripWs = null;
-    };
 }
+
+
+
+
+
+
 
 // ── My Rating ─────────────────────────────────────────────────
 async function loadMyRating() {
@@ -1209,13 +1131,99 @@ async function refreshTripStats() {
                     }
                 }
             } catch (e) { /* silent */ }
+
+            // Check for pending destination change requests
+            try {
+                const tripData = trips.find(x => x.id === t.id);
+                if (tripData && tripData.destinations) {
+                    for (const dest of tripData.destinations.filter(d => d.status !== 'delivered')) {
+                        const changeReq = await getPendingChangeRequest(t.id, dest.id).catch(() => null);
+                        if (changeReq && changeReq.request_id) {
+                            const bannerId = 'dest-change-banner-' + changeReq.request_id;
+                            if (!document.getElementById(bannerId)) {
+                                showDestinationChangeBanner(t.id, dest.id, changeReq);
+                            }
+                        }
+                    }
+                }
+            } catch (e) { /* silent */ }
         }
     } catch (e) { /* silent */ }
 }
 
+// ── Destination Change Banner (driver view) ───────────────────
+let shownChangeRequests = new Set(); // track which requests already shown
+
+function showDestinationChangeBanner(shipmentId, destId, changeReq) {
+    const bannerId = 'dest-change-banner-' + changeReq.request_id;
+    // Already showing this banner
+    if (document.getElementById(bannerId)) return;
+
+    const banner = document.createElement('div');
+    banner.id = bannerId;
+    banner.style.cssText = `
+        position:fixed; top:70px; left:50%; transform:translateX(-50%);
+        background:#1e293b; border:2px solid #3b82f6; border-radius:12px;
+        padding:18px 22px; z-index:999; max-width:460px; width:90%;
+        box-shadow:0 8px 32px rgba(0,0,0,0.5);
+    `;
+    banner.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <span style="font-size:1.4rem;">📍</span>
+            <div>
+                <div style="font-weight:700;font-size:0.95rem;color:#60a5fa;">Shipper Changed Destination</div>
+                <div style="font-size:0.75rem;color:#94a3b8;margin-top:2px;">Please accept or reject the new drop location</div>
+            </div>
+        </div>
+        <div style="padding:10px 14px;background:rgba(0,0,0,0.3);border-radius:8px;margin-bottom:14px;">
+            <div style="font-size:0.68rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">New Address</div>
+            <div style="font-weight:600;font-size:0.9rem;color:#f8fafc;">📍 ${changeReq.new_address}</div>
+        </div>
+        <div style="padding:8px 12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                    border-radius:6px;margin-bottom:14px;font-size:0.75rem;color:#f59e0b;">
+            If you <strong>reject</strong>: deliver at original location and trip ends there.
+        </div>
+        <div style="display:flex;gap:10px;">
+            <button onclick="doRespondDestChange('${shipmentId}','${destId}','rejected','${bannerId}')"
+                    style="flex:1;padding:10px;background:rgba(239,68,68,0.15);color:#ef4444;
+                           border:1px solid rgba(239,68,68,0.4);border-radius:8px;font-weight:700;cursor:pointer;font-size:0.85rem;">
+                ✕ Reject — Deliver Here
+            </button>
+            <button onclick="doRespondDestChange('${shipmentId}','${destId}','accepted','${bannerId}')"
+                    style="flex:1;padding:10px;background:#3b82f6;color:#fff;
+                           border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.85rem;">
+                ✓ Accept New Location
+            </button>
+        </div>
+    `;
+    document.body.appendChild(banner);
+}
+
+async function doRespondDestChange(shipmentId, destId, action, bannerId) {
+    const banner = document.getElementById(bannerId);
+    if (banner) {
+        banner.innerHTML = `<div style="text-align:center;padding:8px;color:#94a3b8;">Processing...</div>`;
+    }
+    try {
+        const result = await respondDestinationChange(shipmentId, destId, action);
+        if (banner) banner.remove();
+        // Remove from shown set so it won't re-appear
+        shownChangeRequests.delete(bannerId.replace('dest-change-banner-', ''));
+        if (action === 'accepted') {
+            showToast('✅ New destination accepted — navigate to new location', 'success');
+        } else {
+            showToast('📍 Delivering at original location — trip will end here', 'success');
+        }
+        // Force full reload of trips so new address / updated stops show immediately
+        await loadMyTrips();
+    } catch(err) {
+        if (banner) banner.remove();
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
 // ── Delivery Photo Upload ─────────────────────────────────────
-async function doUploadDeliveryPhoto(shipmentId, destId, inputEl) {
-    const file = inputEl.files[0];
+async function doUploadDeliveryPhoto(shipmentId, destId, inputEl) {    const file = inputEl.files[0];
     if (!file) return;
     inputEl.value = '';
     showPhotoPreviewModal({
@@ -1726,5 +1734,126 @@ async function loadDriverAnalytics() {
     } catch (e) {
         console.error(e);
         document.getElementById("table-driver-categories").innerHTML = `<div class="alert alert-error">Failed to load analytics: ${e.message}</div>`;
+    }
+}
+
+// ── Driver Chat Widget ───────────────────────────────────────
+let driverChatShipmentId = null;
+let driverChatPollInterval = null;
+
+async function openDriverChatWidget(shipmentId, displayTitle) {
+    driverChatShipmentId = shipmentId;
+    const widget = document.getElementById('driver-chat-widget');
+    if (!widget) return;
+
+    widget.style.display = 'flex';
+    const meta = document.getElementById('driver-chat-meta');
+    if (meta) meta.textContent = displayTitle || 'Chat with Shipper';
+    const status = document.getElementById('driver-chat-status');
+    if (status) { status.textContent = 'Connecting…'; status.style.color = '#f59e0b'; }
+
+    await loadDriverChatHistoryWidget(shipmentId);
+    if (driverChatPollInterval) clearInterval(driverChatPollInterval);
+    driverChatPollInterval = setInterval(() => loadDriverChatHistoryWidget(shipmentId, true), 5000);
+}
+
+async function loadDriverChatHistoryWidget(shipmentId, silent = false) {
+    const box = document.getElementById('driver-chat-messages');
+    const status = document.getElementById('driver-chat-status');
+    if (!shipmentId || !box) return;
+
+    try {
+        if (!silent) {
+            box.innerHTML = '<div style="color:var(--muted);font-size:0.75rem;text-align:center;padding:20px;">Loading chat...</div>';
+        }
+        const msgs = await getMessages(shipmentId);
+        renderDriverChatMessages(msgs);
+        if (status) { status.textContent = 'Chat ready'; status.style.color = '#22c55e'; }
+    } catch (e) {
+        if (!silent) {
+            box.innerHTML = '<div style="color:#ef4444;font-size:0.75rem;text-align:center;padding:20px;">Could not load messages.</div>';
+        }
+        if (status) { status.textContent = 'Chat unavailable'; status.style.color = '#ef4444'; }
+    }
+}
+
+
+function renderDriverChatMessages(msgs) {
+    const box = document.getElementById('driver-chat-messages');
+    if (!box) return;
+    if (!msgs || msgs.length === 0) {
+        box.innerHTML = '<div style="color:var(--muted);font-size:0.75rem;text-align:center;padding:20px;font-style:italic;">No messages yet. Say hello to the shipper!</div>';
+        return;
+    }
+
+    const wasAtBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 40;
+    box.innerHTML = msgs.map(m => {
+        const isMine = m.sender_role === 'driver';
+        const time   = new Date(m.created_at).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+        return `
+            <div style="display:flex;flex-direction:column;align-items:${isMine ? 'flex-end' : 'flex-start'};">
+                <div style="max-width:80%;padding:8px 12px;
+                            border-radius:${isMine ? '12px 12px 2px 12px' : '12px 12px 12px 2px'};
+                            background:${isMine ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'};
+                            border:1px solid ${isMine ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.25)'};
+                            font-size:0.85rem;line-height:1.4;word-break:break-word;">
+                    ${escapeHtmlDriver(m.body)}
+                </div>
+                <div style="font-size:0.65rem;color:var(--muted);margin-top:2px;padding:0 4px;">
+                    ${isMine ? 'You' : escapeHtmlDriver(m.sender_name)} · ${time}
+                </div>
+            </div>`;
+    }).join('');
+    if (wasAtBottom) box.scrollTop = box.scrollHeight;
+}
+
+
+function appendDriverChatMessage(fromRole, senderName, text, ts) {
+    const box = document.getElementById('driver-chat-messages');
+    if (!box) return;
+    const isMine = fromRole === 'driver';
+    const time = ts ? new Date(ts).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '';
+    box.insertAdjacentHTML('beforeend', `
+        <div style="display:flex;flex-direction:column;align-items:${isMine ? 'flex-end' : 'flex-start'};">
+            <div style="max-width:80%;padding:8px 12px;
+                        border-radius:${isMine ? '12px 12px 2px 12px' : '12px 12px 12px 2px'};
+                        background:${isMine ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'};
+                        border:1px solid ${isMine ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.25)'};
+                        font-size:0.85rem;line-height:1.4;word-break:break-word;">
+                ${escapeHtmlDriver(text)}
+            </div>
+            <div style="font-size:0.65rem;color:var(--muted);margin-top:2px;padding:0 4px;">
+                ${isMine ? 'You' : escapeHtmlDriver(senderName)} · ${time}
+            </div>
+        </div>`);
+    box.scrollTop = box.scrollHeight;
+}
+
+function closeDriverChatSocket() {
+    if (driverChatPollInterval) {
+        clearInterval(driverChatPollInterval);
+        driverChatPollInterval = null;
+    }
+}
+
+function closeDriverChatWidget() {
+    const widget = document.getElementById('driver-chat-widget');
+    if (widget) widget.style.display = 'none';
+    closeDriverChatSocket();
+    driverChatShipmentId = null;
+}
+
+async function sendDriverChatMsg() {
+    const inp = document.getElementById('driver-chat-input');
+    if (!inp || !driverChatShipmentId) return;
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+
+    try {
+        await sendMessage(driverChatShipmentId, text);
+        await loadDriverChatHistoryWidget(driverChatShipmentId, true);
+    } catch(e) {
+        showToast('Failed to send message.', 'error');
     }
 }

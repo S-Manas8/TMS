@@ -1,10 +1,18 @@
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+if not __package__:
+    sys.path.insert(0, str(BASE_DIR.parent))
+    __package__ = BASE_DIR.name
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
 from sqlalchemy import text
-from database import engine, Base
-from routers import auth, shipments, bids, tracking, drivers, pod, payments
+from .database import engine, Base
+from .routers import auth, shipments, bids, tracking, drivers, pod, payments, messages
+from .ws_manager import router as ws_router
 
 # Perform safe schema migrations (Option 1: keep data)
 with engine.begin() as conn:
@@ -186,6 +194,36 @@ with engine.begin() as conn:
             cancelled_at DATETIME
         )
     """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS destination_change_requests (
+            id TEXT PRIMARY KEY,
+            shipment_id TEXT NOT NULL,
+            dest_id TEXT NOT NULL,
+            shipper_id TEXT NOT NULL,
+            driver_id TEXT NOT NULL,
+            new_address TEXT NOT NULL,
+            new_lat FLOAT,
+            new_lng FLOAT,
+            status TEXT DEFAULT 'pending',
+            created_at DATETIME,
+            responded_at DATETIME
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            shipment_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL,
+            sender_role TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at DATETIME,
+            read_at DATETIME
+        )
+    """))
+    try:
+        conn.execute(text("ALTER TABLE messages ADD COLUMN driver_id TEXT"))
+    except Exception:
+        pass
 
 # Create all database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -213,6 +251,8 @@ app.include_router(tracking.router,  prefix="/api/track",     tags=["Tracking"])
 app.include_router(drivers.router,   prefix="/api/drivers",   tags=["Drivers"])
 app.include_router(pod.router,       prefix="/api/pod",       tags=["POD"])
 app.include_router(payments.router,  prefix="/api/payments",  tags=["Payments"])
+app.include_router(messages.router,  prefix="/api/shipments",  tags=["Messages"])
+app.include_router(ws_router,        tags=["WebSockets"])
 
 
 @app.get("/api/health")

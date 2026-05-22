@@ -28,9 +28,9 @@ import requests as http
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import Payment, Shipment, Bid, User
-from auth_utils import get_current_user
+from ..database import get_db
+from ..models import Payment, Shipment, Bid, User
+from ..auth_utils import get_current_user
 
 router = APIRouter()
 

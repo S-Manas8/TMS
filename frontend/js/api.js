@@ -20,13 +20,17 @@ function getName() { return localStorage.getItem("fb_name"); }
 function getUserId() { return localStorage.getItem("fb_id"); }
 function isLoggedIn() { return !!getToken(); }
 
-/** WebSocket URL for a shipment room (token in query — browsers cannot set WS headers). */
-function getWsShipmentUrl(shipmentId) {
+/** WebSocket URL for a shipment room (token and driverId in query — browsers cannot set WS headers). */
+function getWsShipmentUrl(shipmentId, driverId) {
     if (!shipmentId || !getToken()) return null;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host;
-    return proto + "//" + host + "/ws/shipment/" + encodeURIComponent(shipmentId)
+    let url = proto + "//" + host + "/ws/shipment/" + encodeURIComponent(shipmentId)
         + "?token=" + encodeURIComponent(getToken());
+    if (driverId) {
+        url += "&driver_id=" + encodeURIComponent(driverId);
+    }
+    return url;
 }
 
 function logout() {
@@ -193,6 +197,26 @@ async function getCancellationRecord(shipmentId) {
     return apiFetch(`/api/shipments/${shipmentId}/cancellation`);
 }
 
+// ---------- Destination Change Requests ----------
+
+async function requestDestinationChange(shipmentId, destId, newAddress, newLat, newLng) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}/change-request`, {
+        method: "POST",
+        body: { new_address: newAddress, new_lat: newLat || null, new_lng: newLng || null }
+    });
+}
+
+async function respondDestinationChange(shipmentId, destId, action) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}/change-request/respond`, {
+        method: "POST",
+        body: { action }
+    });
+}
+
+async function getPendingChangeRequest(shipmentId, destId) {
+    return apiFetch(`/api/shipments/${shipmentId}/destinations/${destId}/change-request`);
+}
+
 // ---------- Escrow / Award-and-Pay ----------
 
 async function createAwardIntent(shipmentId, bidId = null) {
@@ -335,4 +359,35 @@ function statusBadge(status) {
     };
     const [icon, color] = map[status] || ["⚪", "#6b7280"];
     return `<span style="color:${color};font-size:0.8rem;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.06em">${icon} ${status.replace("_", " ")}</span>`;
+}
+
+// ---------- Messages ----------
+
+async function getMessages(shipmentId, driverId = null) {
+    let url = `/api/shipments/${shipmentId}/messages`;
+    if (driverId) {
+        url += `?driver_id=${encodeURIComponent(driverId)}`;
+    }
+    return apiFetch(url);
+}
+
+async function sendMessage(shipmentId, body, driverId = null) {
+    const payload = { body };
+    if (driverId) payload.driver_id = driverId;
+    return apiFetch(`/api/shipments/${shipmentId}/messages`, {
+        method: "POST",
+        body: payload
+    });
+}
+
+async function getUnreadCount(shipmentId, driverId = null) {
+    let url = `/api/shipments/${shipmentId}/messages/unread-count`;
+    if (driverId) {
+        url += `?driver_id=${encodeURIComponent(driverId)}`;
+    }
+    return apiFetch(url);
+}
+
+async function getMessageNotifications() {
+    return apiFetch('/api/shipments/messages/notifications');
 }

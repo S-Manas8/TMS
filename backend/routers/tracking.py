@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
-from database import get_db
-from models import TrackingEvent, Shipment
-from auth_utils import get_current_user
-from ws_manager import broadcast_shipment
+from ..database import get_db
+from ..models import TrackingEvent, Shipment
+from ..auth_utils import get_current_user
 
 router = APIRouter()
 
@@ -32,25 +31,28 @@ async def update_location(
     if shipment.assigned_driver_id != user["sub"]:
         raise HTTPException(403, "You are not assigned to this shipment")
 
+    lat_val = float(data["lat"])
+    lng_val = float(data["lng"])
+
     event = TrackingEvent(
         shipment_id=shipment_id,
         driver_id=user["sub"],
-        lat=float(data["lat"]),
-        lng=float(data["lng"])
+        lat=lat_val,
+        lng=lng_val
     )
     db.add(event)
     db.commit()
-    db.refresh(event)
 
-    await broadcast_shipment(
-        shipment_id,
-        {
+    # Broadcast location update via WebSocket
+    try:
+        from ws_manager import broadcast_shipment
+        await broadcast_shipment(shipment_id, {
             "type": "driver_location",
-            "lat": float(data["lat"]),
-            "lng": float(data["lng"]),
-            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-        },
-    )
+            "lat": lat_val,
+            "lng": lng_val
+        })
+    except Exception as e:
+        print(f"Failed to broadcast driver location: {e}")
 
     return {"message": "Location updated"}
 

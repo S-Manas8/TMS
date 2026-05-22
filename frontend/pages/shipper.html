@@ -265,6 +265,21 @@
         <span class="nav-user" id="nav-name">...</span>
         <span style="color:var(--border)">|</span>
         <span style="color:var(--accent);font-size:0.72rem;font-family:var(--font-mono);letter-spacing:0.08em;">SHIPPER</span>
+        <div style="position:relative;">
+            <button class="btn btn-outline btn-sm" onclick="toggleShipperNotifications()" title="Message notifications"
+                    style="width:34px;height:34px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;">
+                🔔
+                <span id="shipper-notification-badge"
+                      style="display:none;position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;border-radius:999px;min-width:17px;height:17px;padding:0 4px;font-size:0.65rem;line-height:17px;font-family:var(--font-mono);font-weight:700;"></span>
+            </button>
+            <div id="shipper-notification-panel"
+                 style="display:none;position:absolute;right:0;top:40px;width:330px;max-height:420px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,0.45);z-index:2000;">
+                <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-weight:700;font-size:0.85rem;">Messages</div>
+                <div id="shipper-notification-list">
+                    <div style="padding:16px;color:var(--muted);font-size:0.8rem;">No new messages.</div>
+                </div>
+            </div>
+        </div>
         <button class="btn btn-primary btn-sm" onclick="openDrawer()" style="gap:6px;">
             + Post Load
         </button>
@@ -337,34 +352,26 @@
         <!-- Detail Panel -->
         <div class="detail-card panel-detail" id="detail-panel">
             <!-- Header -->
-            <div style="padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
                 <div>
                     <div style="font-family:var(--font-cond);font-weight:700;font-size:1.1rem;margin-bottom:4px;" id="detail-title">—</div>
                     <div id="detail-status"></div>
                 </div>
+                <div id="detail-actions" style="display:flex;align-items:center;gap:8px;"></div>
                 <button onclick="closeDetail()" style="background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:2px 6px;">✕</button>
             </div>
 
             <!-- Meta strip -->
                 <div id="detail-meta" class="meta-row" style="padding:12px 18px;border-bottom:1px solid var(--border);gap:16px;margin:0;"></div>
 
-                <div id="live-trip-panel" style="display:none;padding:12px 18px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.12);">
-                    <div style="font-size:0.72rem;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Live trip</div>
-                    <div id="live-ws-status" style="font-size:0.68rem;color:var(--muted);margin-bottom:8px;">Connecting…</div>
-                    <div id="live-chat-messages" style="max-height:140px;overflow-y:auto;font-size:0.82rem;border:1px solid var(--border);border-radius:8px;padding:8px;background:var(--surface);margin-bottom:8px;"></div>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <input type="text" id="live-chat-input" placeholder="Message driver…" maxlength="2000"
-                               style="flex:1;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:0.85rem;"
-                               onkeydown="if(event.key==='Enter'){event.preventDefault();sendLiveTripChat();}">
-                        <button type="button" class="btn btn-primary btn-sm" onclick="sendLiveTripChat()">Send</button>
-                    </div>
-                </div>
-
             <!-- Tabs -->
             <div class="detail-tabs">
                 <div class="detail-tab active" onclick="switchDetailTab('route')" id="tab-route">📍 Route</div>
                 <div class="detail-tab" onclick="switchDetailTab('bids')" id="tab-bids">🎯 Bids</div>
                 <div class="detail-tab" onclick="switchDetailTab('photos')" id="tab-photos">📷 Photos</div>
+                <div class="detail-tab" onclick="switchDetailTab('chat')" id="tab-chat" style="display:none;">
+                    💬 Chat <span id="chat-unread-badge" style="display:none;font-size:0.6rem;background:#ef4444;color:#fff;border-radius:10px;padding:1px 5px;margin-left:3px;font-family:var(--font-mono);"></span>
+                </div>
             </div>
 
             <!-- Tab: Route -->
@@ -395,6 +402,29 @@
                 <div id="proof-request-status" style="margin-bottom:10px;"></div>
                 <div id="pod-section" style="display:block;">
                     <div id="pod-photos-grid"></div>
+                </div>
+            </div>
+
+            <!-- Tab: Chat -->
+            <div class="tab-pane" id="pane-chat">
+                <div style="display:flex;flex-direction:column;height:400px;">
+                    <div id="shipper-chat-status" style="font-size:0.75rem;color:var(--muted);padding:8px 12px;">Chat disconnected</div>
+                    <!-- Messages area -->
+                    <div id="shipper-chat-messages"
+                         style="flex:1;overflow-y:auto;padding:8px 4px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;">
+                        <div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:20px;">
+                            Select a shipment with an assigned driver to start chatting.
+                        </div>
+                    </div>
+                    <!-- Input -->
+                    <div style="border-top:1px solid var(--border);padding-top:10px;display:flex;gap:8px;align-items:center;">
+                        <input type="text" id="shipper-chat-input"
+                               placeholder="Type a message…" maxlength="1000"
+                               style="flex:1;padding:9px 12px;font-size:0.88rem;border-radius:8px;"
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();doShipperSendMessage();}">
+                        <button class="btn btn-primary btn-sm" onclick="doShipperSendMessage()"
+                                style="padding:9px 16px;font-size:0.85rem;">Send</button>
+                    </div>
                 </div>
             </div>
     </div>
@@ -601,7 +631,7 @@
 </div>
 
 
-<script src="/js/api.js?v=6"></script>
+<script src="/js/api.js?v=9"></script>
     <script>
         // Guard: only shippers allowed
         if (!isLoggedIn() || getRole() !== "shipper") {
@@ -624,12 +654,14 @@
 
         // ── Detail tab switching ───────────────────────────────────
         function switchDetailTab(tab) {
-            ['route','bids','photos'].forEach(t => {
-                document.getElementById('tab-' + t).classList.toggle('active', t === tab);
-                document.getElementById('pane-' + t).classList.toggle('active', t === tab);
+            ['route','bids','photos','chat'].forEach(t => {
+                const btn = document.getElementById('tab-' + t);
+                const pane = document.getElementById('pane-' + t);
+                if (btn) btn.classList.toggle('active', t === tab);
+                if (pane) pane.classList.toggle('active', t === tab);
             });
-            // Invalidate map size when route tab becomes visible
             if (tab === 'route' && detailMap) setTimeout(() => detailMap.invalidateSize(), 50);
+            if (tab === 'chat' && currentShipmentId) loadShipperChat(currentShipmentId);
         }
 
         // ── Close detail panel ─────────────────────────────────────
@@ -639,10 +671,76 @@
             currentShipmentId = null;
             document.querySelectorAll('.shipment-card').forEach(c => c.classList.remove('selected'));
             stopTripLiveFeed();
+            closeShipperChatSocket();
         }
 
         let currentShipmentId = null;
         let myShipments = [];
+        let shipperMessageNotifications = [];
+        let shipperNotificationPoll = null;
+
+        function shortAddress(addr) {
+            return (addr || '').split(',')[0] || 'Stop';
+        }
+
+        async function refreshShipperMessageNotifications() {
+            try {
+                shipperMessageNotifications = await getMessageNotifications();
+                renderShipperMessageNotifications();
+            } catch (err) {
+                console.warn('Failed to load message notifications', err);
+            }
+        }
+
+        function renderShipperMessageNotifications() {
+            const badge = document.getElementById('shipper-notification-badge');
+            const list = document.getElementById('shipper-notification-list');
+            if (!badge || !list) return;
+
+            const total = shipperMessageNotifications.reduce((sum, n) => sum + (n.unread || 0), 0);
+            if (total > 0) {
+                badge.textContent = total > 99 ? '99+' : total;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+
+            if (!shipperMessageNotifications.length) {
+                list.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:0.8rem;">No new messages.</div>';
+                return;
+            }
+
+            list.innerHTML = shipperMessageNotifications.map(n => {
+                const route = `${shortAddress(n.pickup_address)} → ${shortAddress(n.drop_address)}`;
+                const time = n.latest_at ? new Date(n.latest_at).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' }) : '';
+                return `
+                <button onclick="openMessageNotification('${n.shipment_id}', '${n.driver_id || ''}')"
+                        style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid rgba(148,163,184,0.08);padding:12px 14px;color:var(--text);cursor:pointer;">
+                    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:4px;">
+                        <strong style="font-size:0.84rem;">${escapeHtml(n.shipment_title || 'Shipment')}</strong>
+                        <span style="background:#ef4444;color:#fff;border-radius:999px;padding:1px 7px;font-size:0.66rem;font-family:var(--font-mono);">${n.unread}</span>
+                    </div>
+                    <div style="font-size:0.74rem;color:var(--muted);margin-bottom:5px;">${escapeHtml(route)} · ${escapeHtml(time)}</div>
+                    <div style="font-size:0.78rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                        ${escapeHtml(n.sender_name)}: ${escapeHtml(n.latest_body)}
+                    </div>
+                </button>`;
+            }).join('');
+        }
+
+        function toggleShipperNotifications() {
+            const panel = document.getElementById('shipper-notification-panel');
+            if (!panel) return;
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            if (panel.style.display === 'block') refreshShipperMessageNotifications();
+        }
+
+        async function openMessageNotification(shipmentId, driverId) {
+            const panel = document.getElementById('shipper-notification-panel');
+            if (panel) panel.style.display = 'none';
+            await openShipperChatWidget(shipmentId, null, driverId);
+            await refreshShipperMessageNotifications();
+        }
 
         // ── Map Setup ──────────────────────────────────────────────
         let map;
@@ -1033,6 +1131,7 @@
             try {
                 myShipments = await getMyShipments();
                 updateStats(myShipments);
+                refreshShipperMessageNotifications();
                 if (typeof mainTab !== 'undefined' && mainTab === 'analytics') {
                     renderShipperAnalytics();
                 }
@@ -1118,218 +1217,9 @@
         let detailMarkers = [];
         let driverMarker = null;
         let trackingPollInterval = null;
-        let shipmentLiveWs = null;
-        let shipmentPingTimer = null;
 
-        function stopTripLiveFeed() {
-            if (trackingPollInterval) {
-                clearInterval(trackingPollInterval);
-                trackingPollInterval = null;
-            }
-            if (shipmentPingTimer) {
-                clearInterval(shipmentPingTimer);
-                shipmentPingTimer = null;
-            }
-            if (shipmentLiveWs) {
-                try { shipmentLiveWs.close(); } catch (e) {}
-                shipmentLiveWs = null;
-            }
-            const panel = document.getElementById('live-trip-panel');
-            if (panel) panel.style.display = 'none';
-            const box = document.getElementById('live-chat-messages');
-            if (box) box.innerHTML = '';
-            const st = document.getElementById('live-ws-status');
-            if (st) st.textContent = '';
-        }
+        
 
-        function setLiveTripPanelVisible(show) {
-            const p = document.getElementById('live-trip-panel');
-            if (p) p.style.display = show ? 'block' : 'none';
-        }
-
-        function setLiveWsStatus(text) {
-            const el = document.getElementById('live-ws-status');
-            if (el) el.textContent = text;
-        }
-
-        function escapeHtml(str) {
-            if (str == null || str === '') return '';
-            const d = document.createElement('div');
-            d.textContent = str;
-            return d.innerHTML;
-        }
-
-        function appendLiveChatLine(fromRole, senderName, text, ts) {
-            const box = document.getElementById('live-chat-messages');
-            if (!box) return;
-            const whoLabel = fromRole === 'driver' ? 'Driver' : 'Shipper';
-            const line = `<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.1);">
-                <span style="font-size:0.68rem;color:var(--muted);">${escapeHtml(ts || '')}</span>
-                <div><strong>${escapeHtml(senderName || whoLabel)}</strong> <span style="color:var(--muted);font-size:0.7rem;">(${whoLabel})</span></div>
-                <div style="margin-top:2px;">${escapeHtml(text)}</div></div>`;
-            box.insertAdjacentHTML('beforeend', line);
-            box.scrollTop = box.scrollHeight;
-        }
-
-        function sendLiveTripChat() {
-            if (!shipmentLiveWs || shipmentLiveWs.readyState !== WebSocket.OPEN) return;
-            const inp = document.getElementById('live-chat-input');
-            const text = (inp && inp.value || '').trim();
-            if (!text) return;
-            try {
-                shipmentLiveWs.send(JSON.stringify({ type: 'chat', text: text }));
-                inp.value = '';
-            } catch (e) { console.error(e); }
-        }
-
-        function applyDriverPosition(lat, lng) {
-            if (!detailMap || lat == null || lng == null) return;
-            const pos = [lat, lng];
-            if (!driverMarker) {
-                driverMarker = L.marker(pos, {
-                    icon: L.icon({
-                        iconUrl: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
-                        iconSize: [32, 32],
-                        iconAnchor: [16, 16]
-                    })
-                }).addTo(detailMap).bindPopup('Driver is here');
-            } else {
-                driverMarker.setLatLng(pos);
-            }
-        }
-
-        async function fetchLatestDriverDot(shipmentId) {
-            try {
-                const data = await getLatestLocation(shipmentId);
-                if (data && data.lat) applyDriverPosition(data.lat, data.lng);
-            } catch (e) { console.error('Latest location', e); }
-        }
-
-        function pollDriverLocationFallback(shipmentId) {
-            if (trackingPollInterval) clearInterval(trackingPollInterval);
-            const tick = async () => {
-                try {
-                    const data = await getLatestLocation(shipmentId);
-                    if (data && data.lat) applyDriverPosition(data.lat, data.lng);
-                } catch (e) { console.error('Poll error', e); }
-            };
-            tick();
-            trackingPollInterval = setInterval(tick, 15000);
-        }
-
-        function startLiveTripFeed(shipmentId) {
-            stopTripLiveFeed();
-            setLiveTripPanelVisible(true);
-            setLiveWsStatus('Connecting…');
-
-            fetchLatestDriverDot(shipmentId);
-
-            const url = getWsShipmentUrl(shipmentId);
-            if (!url) {
-                setLiveWsStatus('Sign in required for live updates');
-                pollDriverLocationFallback(shipmentId);
-                return;
-            }
-            try {
-                shipmentLiveWs = new WebSocket(url);
-            } catch (e) {
-                console.error(e);
-                setLiveWsStatus('WebSocket unavailable — using periodic refresh');
-                pollDriverLocationFallback(shipmentId);
-                return;
-            }
-
-            shipmentLiveWs.onopen = () => {
-                setLiveWsStatus('Live — WebSocket connected');
-                shipmentPingTimer = setInterval(() => {
-                    if (shipmentLiveWs && shipmentLiveWs.readyState === WebSocket.OPEN) {
-                        try { shipmentLiveWs.send(JSON.stringify({ type: 'ping' })); } catch (x) {}
-                    }
-                }, 45000);
-            };
-            shipmentLiveWs.onmessage = (ev) => {
-                let msg;
-                try { msg = JSON.parse(ev.data); } catch (x) { return; }
-                if (msg.type === 'driver_location' && msg.lat != null && msg.lng != null) {
-                    applyDriverPosition(msg.lat, msg.lng);
-                } else if (msg.type === 'chat') {
-                    appendLiveChatLine(msg.from_role, msg.sender_name, msg.text, msg.ts);
-                } else if (msg.type === 'shipment_status') {
-                    if (msg.status === 'delivered') {
-                        setLiveWsStatus('Trip completed');
-                        showShipperToast('Shipment marked delivered', 'success');
-                    }
-                    loadMyShipments();
-                    if (currentShipmentId === msg.shipment_id) {
-                        selectShipment(msg.shipment_id);
-                    }
-                } else if (msg.type === 'connected') {
-                    setLiveWsStatus('Live — WebSocket connected');
-                }
-            };
-            shipmentLiveWs.onerror = () => setLiveWsStatus('Connection error');
-            shipmentLiveWs.onclose = () => {
-                if (shipmentPingTimer) {
-                    clearInterval(shipmentPingTimer);
-                    shipmentPingTimer = null;
-                }
-                shipmentLiveWs = null;
-                setLiveWsStatus('Disconnected — periodic refresh');
-                if (currentShipmentId === shipmentId) pollDriverLocationFallback(shipmentId);
-            };
-        }
-
-        async function pollDriverLocation(shipmentId) {
-            startLiveTripFeed(shipmentId);
-        }
-
-        function initDetailMap() {
-            if (detailMap) return;
-            const mapEl = document.getElementById("detail-map");
-            mapEl.style.display = "block";
-            detailMap = L.map('detail-map').setView([20.5937, 78.9629], 5);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(detailMap);
-        }
-
-        function plotShipmentOnMap(s) {
-            initDetailMap();
-            detailMarkers.forEach(m => detailMap.removeLayer(m));
-            detailMarkers = [];
-            if (driverMarker) detailMap.removeLayer(driverMarker);
-            driverMarker = null;
-
-            const points = [];
-            if (s.pickup_lat && s.pickup_lng) {
-                const p = [s.pickup_lat, s.pickup_lng];
-                points.push(p);
-                const m = L.marker(p).addTo(detailMap).bindPopup("Pickup: " + s.pickup_address);
-                detailMarkers.push(m);
-            }
-
-            if (s.destinations) {
-                s.destinations.forEach(d => {
-                    const p = [d.lat, d.lng];
-                    points.push(p);
-                    const m = L.marker(p, {
-                        icon: L.icon({
-                            iconUrl: d.status === 'delivered' ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png' : 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                            iconSize: [25, 41],
-                            iconAnchor: [12, 41],
-                            popupAnchor: [1, -34],
-                            shadowSize: [41, 41]
-                        })
-                    }).addTo(detailMap).bindPopup("Drop: " + d.address);
-                    detailMarkers.push(m);
-                });
-            }
-
-            if (points.length > 0) {
-                detailMap.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
-            }
-        }
 
         async function selectShipment(id) {
             // Highlight selected card
@@ -1417,6 +1307,30 @@
                 }
             }
 
+            // Stop old chat socket when switching shipments
+            if (shipperChatPollInterval) { clearInterval(shipperChatPollInterval); shipperChatPollInterval = null; }
+            shipperChatShipmentId = null;
+            closeShipperChatSocket();
+
+            const chatTab = document.getElementById('tab-chat');
+            const detailActions = document.getElementById('detail-actions');
+            if (chatTab) {
+                if (chatTab.classList.contains('active')) {
+                    switchDetailTab('bids');
+                }
+                chatTab.style.display = 'none';
+            }
+            if (detailActions) {
+                detailActions.innerHTML = s.assigned_driver && s.assigned_driver.id ?
+                    `<button class="btn btn-outline btn-sm"
+                             title="Open chat"
+                             onclick="openShipperChatWidget('${id}', 'Chat: ${s.pickup_address.split(',')[0]} → ${s.drop_address || 'Stop'}')"
+                             style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border-radius:8px;font-size:1rem;">
+                        💬
+                     </button>` :
+                    '';
+            }
+
             // Auto-switch to bids tab
             switchDetailTab('bids');
             await loadBids(id);
@@ -1483,6 +1397,21 @@
                               '</button>'
                             : '';
 
+                        // Check if there is an active pending change request for this destination
+                        const pendingChange = s.destination_change_requests
+                            ? s.destination_change_requests.find(cr => cr.dest_id === d.id && cr.status === "pending")
+                            : null;
+
+                        // Change destination button — always available on pending stops
+                        const changeDestBtn = pendingChange
+                            ? '<span style="font-size:0.7rem;color:#f59e0b;padding:4px 8px;border:1px dashed rgba(245,158,11,0.3);border-radius:6px;margin-left:4px;font-family:var(--font-mono);">⏳ Change pending</span>'
+                            : '<button class="btn btn-sm" ' +
+                              'style="padding:4px 10px;font-size:0.72rem;background:rgba(59,130,246,0.1);' +
+                              'color:#60a5fa;border:1px solid rgba(59,130,246,0.4);border-radius:6px;cursor:pointer;margin-left:4px;" ' +
+                              'onclick="openChangeDestModal(\'' + s.id + '\',\'' + d.id + '\',\'' + d.address.replace(/'/g, "\\'") + '\')">' +
+                              '📍 Change Dest' +
+                              '</button>';
+
                         rightSide =
                             driverBadge +
                             '<button class="btn btn-primary btn-sm" ' +
@@ -1490,11 +1419,22 @@
                             'onclick="doApproveArrival(\'' + s.id + '\',\'' + d.id + '\')">' +
                             '✓ Approve' +
                             '</button>' +
-                            cancelBtn;
+                            cancelBtn +
+                            changeDestBtn;
 
                     } else {
                         rightSide =
                             '<span style="font-size:0.72rem;color:var(--muted);">' + d.status + '</span>';
+                    }
+
+                    // Show pending destination change if shipper sent one and driver hasn't responded yet
+                    let pendingChangeHtml = "";
+                    if (d.pending_change && d.pending_change.new_address) {
+                        pendingChangeHtml =
+                            '<div style="font-size:0.72rem;color:#60a5fa;background:rgba(59,130,246,0.1);' +
+                            'border:1px solid rgba(59,130,246,0.25);border-radius:4px;padding:3px 8px;margin-top:4px;display:inline-block;">' +
+                            '⏳ Awaiting driver approval → <strong>' + d.pending_change.new_address + '</strong>' +
+                            '</div>';
                     }
 
                     stopsHtml +=
@@ -1502,6 +1442,7 @@
                         'padding:10px 0;border-bottom:1px solid var(--border);">' +
                             '<span style="font-size:0.9rem;">' +
                                 icon + ' <strong>Stop ' + (i + 1) + ':</strong> ' + d.address +
+                                pendingChangeHtml +
                             '</span>' +
                             '<span style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:12px;">' +
                                 rightSide +
@@ -1934,6 +1875,9 @@
         // Refresh shipment list every 15s; refresh open bid panel every 10s
         setInterval(() => {
             loadMyShipments();
+            if (currentShipmentId) {
+                selectShipment(currentShipmentId);
+            }
         }, 15000);
 
         setInterval(() => {
@@ -2052,8 +1996,9 @@
             }
         }
 
-        // Init — load shipments on page open
-        loadMyShipments();
+        // Init — load shipments and message notifications on page open
+        loadMyShipments().then(refreshShipperMessageNotifications);
+        shipperNotificationPoll = setInterval(refreshShipperMessageNotifications, 10000);
 
         // ── POD Photos ─────────────────────────────────────────────
         async function loadPodPhotos(shipmentId) {
@@ -2296,6 +2241,203 @@
             }
         }
 
+
+        // ── Shipper Chat ─────────────────────────────────────────
+        let shipperChatShipmentId   = null;
+        let shipperChatDriverId     = null;
+        let shipperChatPollInterval = null;
+
+        async function openShipperChatWidget(shipmentId, displayTitle = null, driverOverrideId = null) {
+            if (!shipmentId) return;
+            if (currentShipmentId !== shipmentId) {
+                await selectShipment(shipmentId);
+            }
+            const chatTab = document.getElementById('tab-chat');
+            if (chatTab) chatTab.style.display = '';
+            switchDetailTab('chat');
+            await loadShipperChat(shipmentId, driverOverrideId);
+        }
+
+        async function loadShipperChat(shipmentId, driverOverrideId = null) {
+            if (!shipmentId) return;
+            shipperChatShipmentId = shipmentId;
+            const box = document.getElementById('shipper-chat-messages');
+            if (!box) return;
+
+            const s = myShipments.find(x => x.id === shipmentId);
+            let driverId = driverOverrideId || s?.assigned_driver?.id || null;
+            if (!driverId) {
+                const sDetail = await getShipment(shipmentId);
+                driverId = sDetail?.assigned_driver?.id || null;
+            }
+            if (!driverId) {
+                box.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:20px;">Chat is available once a driver is assigned to this shipment.</div>';
+                return;
+            }
+
+            shipperChatDriverId = driverId;
+            box.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:0.78rem;padding:16px;">Loading chat…</div>';
+            await loadShipperChatHistory(shipmentId, driverId);
+            if (shipperChatPollInterval) clearInterval(shipperChatPollInterval);
+            shipperChatPollInterval = setInterval(() => {
+                loadShipperChatHistory(shipmentId, driverId, true);
+            }, 5000);
+        }
+
+        async function loadShipperChatHistory(shipmentId, driverId, silent = false) {
+            const box = document.getElementById('shipper-chat-messages');
+            const status = document.getElementById('shipper-chat-status');
+            if (!box) return;
+            try {
+                const msgs = await getMessages(shipmentId, driverId);
+                renderShipperChatMessages(msgs);
+                if (status) { status.textContent = 'Chat ready'; status.style.color = '#22c55e'; }
+            } catch (e) {
+                if (!silent) box.innerHTML = '<div style="text-align:center;color:#ef4444;font-size:0.78rem;padding:16px;">Could not load messages.</div>';
+                if (status) { status.textContent = 'Chat unavailable'; status.style.color = '#ef4444'; }
+            }
+        }
+
+        function connectShipperChatSocket(shipmentId, driverId) {
+            if (shipperChatShipmentId === shipmentId && shipperChatSocket && shipperChatSocket.readyState === WebSocket.OPEN) {
+                return;
+            }
+
+            closeShipperChatSocket();
+            const url = getWsShipmentUrl(shipmentId, driverId);
+            const status = document.getElementById('shipper-chat-status');
+            if (!url) {
+                if (status) {
+                    status.textContent = 'Chat unavailable';
+                    status.style.color = '#ef4444';
+                }
+                return;
+            }
+
+            shipperChatShipmentId = shipmentId;
+            shipperChatSocket = new WebSocket(url);
+            if (status) {
+                status.textContent = 'Connecting…';
+                status.style.color = '#f59e0b';
+            }
+
+            shipperChatSocket.onopen = () => {
+                if (status) {
+                    status.textContent = 'Connected';
+                    status.style.color = '#22c55e';
+                }
+            };
+
+            shipperChatSocket.onmessage = (event) => {
+                let payload;
+                try { payload = JSON.parse(event.data); } catch (err) { return; }
+                if (payload.type === 'chat') {
+                    appendShipperChatMessage(payload.from_role, payload.sender_name, payload.text, payload.ts);
+                }
+            };
+
+            shipperChatSocket.onclose = () => {
+                if (status) {
+                    status.textContent = 'Disconnected';
+                    status.style.color = '#ef4444';
+                }
+            };
+
+            shipperChatSocket.onerror = () => {
+                if (status) {
+                    status.textContent = 'Connection error';
+                    status.style.color = '#ef4444';
+                }
+            };
+        }
+
+        function renderShipperChatMessages(msgs) {
+            const box = document.getElementById('shipper-chat-messages');
+            if (!box) return;
+            const wasAtBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 40;
+
+            if (!msgs || msgs.length === 0) {
+                box.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:0.78rem;padding:20px;font-style:italic;">No messages yet. Say hello to the driver!</div>';
+                return;
+            }
+
+            box.innerHTML = msgs.map(m => {
+                const isMine = m.sender_role === 'shipper';
+                const time   = new Date(m.created_at).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
+                return `
+                <div style="display:flex;flex-direction:column;align-items:${isMine ? 'flex-end' : 'flex-start'};">
+                    <div style="max-width:80%;padding:8px 12px;border-radius:${isMine ? '12px 12px 2px 12px' : '12px 12px 12px 2px'};
+                                background:${isMine ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'};
+                                border:1px solid ${isMine ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.25)'};
+                                font-size:0.85rem;line-height:1.4;">
+                        ${escapeHtml(m.body)}
+                    </div>
+                    <div style="font-size:0.65rem;color:var(--muted);margin-top:2px;padding:0 4px;">
+                        ${isMine ? 'You' : escapeHtml(m.sender_name)} · ${time}
+                    </div>
+                </div>`;
+            }).join('');
+
+            if (wasAtBottom) box.scrollTop = box.scrollHeight;
+        }
+
+        function appendShipperChatMessage(fromRole, senderName, text, ts) {
+            const box = document.getElementById('shipper-chat-messages');
+            if (!box) return;
+            const isMine = fromRole === 'shipper';
+            const time = ts ? new Date(ts).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}) : '';
+            box.insertAdjacentHTML('beforeend', `
+                <div style="display:flex;flex-direction:column;align-items:${isMine ? 'flex-end' : 'flex-start'};">
+                    <div style="max-width:80%;padding:8px 12px;border-radius:${isMine ? '12px 12px 2px 12px' : '12px 12px 12px 2px'};
+                                background:${isMine ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'};
+                                border:1px solid ${isMine ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.25)'};
+                                font-size:0.85rem;line-height:1.4;word-break:break-word;">
+                        ${escapeHtml(text)}
+                    </div>
+                    <div style="font-size:0.65rem;color:var(--muted);margin-top:2px;padding:0 4px;">
+                        ${isMine ? 'You' : escapeHtml(senderName)} · ${time}
+                    </div>
+                </div>`);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function closeShipperChatSocket() {
+            if (shipperChatPollInterval) {
+                clearInterval(shipperChatPollInterval);
+                shipperChatPollInterval = null;
+            }
+            shipperChatShipmentId = null;
+            shipperChatDriverId = null;
+        }
+
+        async function doShipperSendMessage() {
+            const inp = document.getElementById('shipper-chat-input');
+            if (!inp || !currentShipmentId) return;
+            const text = inp.value.trim();
+            if (!text) return;
+            inp.value = '';
+
+            if (!shipperChatShipmentId || !shipperChatDriverId) {
+                showShipperToast('Open a shipment chat first.', 'error');
+                return;
+            }
+
+            try {
+                await sendMessage(shipperChatShipmentId, text, shipperChatDriverId);
+                await loadShipperChatHistory(shipperChatShipmentId, shipperChatDriverId, true);
+            } catch (e) {
+                showShipperToast('Failed to send message: ' + e.message, 'error');
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        // Stop chat polling when detail panel closes
+        const _origCloseDetail = typeof closeDetail === 'function' ? closeDetail : null;
+
         function showShipperToast(message, type = 'success') {
             const toast = document.createElement('div');
             toast.style.cssText = `
@@ -2306,6 +2448,168 @@
             toast.textContent = message;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 4000);
+        }
+
+        // ── Change Destination Modal (Shipper) ─────────────────────
+        let changeDestMap = null;
+        let changeDestMarker = null;
+        let changeDestLat = null;
+        let changeDestLng = null;
+
+        function openChangeDestModal(shipmentId, destId, currentAddress) {
+            const existing = document.getElementById('change-dest-modal');
+            if (existing) existing.remove();
+            changeDestMap = null; changeDestMarker = null;
+            changeDestLat = null; changeDestLng = null;
+
+            const modal = document.createElement('div');
+            modal.id = 'change-dest-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:3000;display:flex;align-items:center;justify-content:center;padding:24px;';
+            modal.innerHTML = `
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+                             max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;
+                             display:flex;flex-direction:column;max-height:90vh;">
+                    <!-- Header -->
+                    <div style="padding:16px 20px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2);
+                                display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+                        <div>
+                            <div style="font-family:var(--font-cond);font-weight:700;font-size:1.05rem;">📍 Change Destination</div>
+                            <div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">Driver will be notified and must approve</div>
+                        </div>
+                        <button onclick="document.getElementById('change-dest-modal').remove()"
+                                style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+                    </div>
+
+                    <!-- Scrollable body -->
+                    <div style="flex:1;overflow-y:auto;padding:18px 20px;">
+                        <div id="change-dest-alert" style="margin-bottom:10px;"></div>
+
+                        <!-- Current address -->
+                        <div style="padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:8px;margin-bottom:14px;font-size:0.82rem;">
+                            <span style="color:var(--muted);font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em;">Current: </span>
+                            <strong>${currentAddress}</strong>
+                        </div>
+
+                        <!-- Search input -->
+                        <div style="display:flex;gap:6px;margin-bottom:10px;">
+                            <input type="text" id="change-dest-search"
+                                   placeholder="Search new address or click map..."
+                                   style="flex:1;padding:9px 12px;font-size:0.85rem;"
+                                   onkeydown="if(event.key==='Enter'){event.preventDefault();searchChangeDestAddress();}">
+                            <button onclick="searchChangeDestAddress()" class="btn btn-outline btn-sm" style="padding:8px 12px;flex-shrink:0;">🔍</button>
+                        </div>
+
+                        <!-- Map -->
+                        <div id="change-dest-map" style="height:260px;width:100%;border-radius:8px;
+                             border:1px solid var(--border);margin-bottom:10px;"></div>
+
+                        <!-- Selected address display -->
+                        <div id="change-dest-selected" style="padding:8px 12px;background:rgba(59,130,246,0.08);
+                             border:1px solid rgba(59,130,246,0.2);border-radius:8px;font-size:0.82rem;
+                             color:#60a5fa;display:none;margin-bottom:14px;">
+                            📍 <span id="change-dest-selected-text"></span>
+                        </div>
+
+                        <!-- Warning -->
+                        <div style="padding:8px 12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);
+                                    border-radius:6px;font-size:0.75rem;color:#f59e0b;margin-bottom:14px;">
+                            ⚠️ Driver can <strong>accept</strong> (go to new address) or <strong>reject</strong> (deliver at original location and end trip there).
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div style="padding:14px 20px;border-top:1px solid var(--border);background:rgba(0,0,0,0.15);
+                                display:flex;gap:10px;flex-shrink:0;">
+                        <button onclick="document.getElementById('change-dest-modal').remove()"
+                                class="btn btn-outline" style="flex:1;">Cancel</button>
+                        <button onclick="doRequestDestChange('${shipmentId}','${destId}')"
+                                id="change-dest-btn" class="btn btn-primary" style="flex:2;font-weight:700;">
+                            📤 Send to Driver
+                        </button>
+                    </div>
+                </div>`;
+            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+            document.body.appendChild(modal);
+
+            // Init map after modal is in DOM
+            setTimeout(() => {
+                const mapEl = document.getElementById('change-dest-map');
+                if (!mapEl || changeDestMap) return;
+                changeDestMap = L.map('change-dest-map').setView([20.5937, 78.9629], 5);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(changeDestMap);
+
+                changeDestMap.on('click', async function(e) {
+                    const lat = e.latlng.lat, lng = e.latlng.lng;
+                    changeDestLat = lat; changeDestLng = lng;
+                    if (changeDestMarker) changeDestMap.removeLayer(changeDestMarker);
+                    changeDestMarker = L.marker([lat, lng]).addTo(changeDestMap);
+                    // Reverse geocode
+                    try {
+                        const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                        const data = await resp.json();
+                        const addr = data.display_name
+                            ? data.display_name.split(',').slice(0,3).join(', ')
+                            : `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+                        document.getElementById('change-dest-search').value = addr;
+                        document.getElementById('change-dest-selected-text').textContent = addr;
+                        document.getElementById('change-dest-selected').style.display = 'block';
+                        changeDestMarker.bindPopup(addr).openPopup();
+                    } catch(e) {
+                        const addr = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+                        document.getElementById('change-dest-selected-text').textContent = addr;
+                        document.getElementById('change-dest-selected').style.display = 'block';
+                    }
+                });
+            }, 80);
+        }
+
+        async function searchChangeDestAddress() {
+            const raw = document.getElementById('change-dest-search').value.trim();
+            if (!raw || !changeDestMap) return;
+            try {
+                const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(raw)}`;
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (!data || !data.length) { alert('Address not found. Try a shorter query or click on the map.'); return; }
+                const lat = parseFloat(data[0].lat), lng = parseFloat(data[0].lon);
+                changeDestLat = lat; changeDestLng = lng;
+                if (changeDestMarker) changeDestMap.removeLayer(changeDestMarker);
+                changeDestMarker = L.marker([lat, lng]).addTo(changeDestMap).bindPopup(raw).openPopup();
+                changeDestMap.setView([lat, lng], 14);
+                document.getElementById('change-dest-selected-text').textContent = raw;
+                document.getElementById('change-dest-selected').style.display = 'block';
+            } catch(e) {
+                alert('Search failed. Please click on the map instead.');
+            }
+        }
+
+        async function doRequestDestChange(shipmentId, destId) {
+            const addrInput = document.getElementById('change-dest-search').value.trim();
+            const selectedText = document.getElementById('change-dest-selected-text').textContent.trim();
+            const finalAddr = selectedText || addrInput;
+
+            if (!finalAddr) {
+                document.getElementById('change-dest-alert').innerHTML =
+                    '<div class="alert alert-error" style="margin:0 0 8px;">Please search or click the map to select a new address.</div>';
+                return;
+            }
+            const btn = document.getElementById('change-dest-btn');
+            btn.disabled = true; btn.textContent = 'Sending...';
+            try {
+                await requestDestinationChange(shipmentId, destId, finalAddr, changeDestLat, changeDestLng);
+                document.getElementById('change-dest-modal').remove();
+                // Store pending address so route panel shows it immediately
+                window['pending_change_' + destId] = finalAddr;
+                showShipperToast('📍 Destination change sent to driver — awaiting response', 'success');
+                // Refresh detail panel to show pending badge
+                await selectShipment(shipmentId);
+            } catch(err) {
+                document.getElementById('change-dest-alert').innerHTML =
+                    `<div class="alert alert-error" style="margin:0 0 8px;">${err.message}</div>`;
+                btn.disabled = false; btn.textContent = '📤 Send to Driver';
+            }
         }
 
         // ── Cancellation Modal ─────────────────────────────────────

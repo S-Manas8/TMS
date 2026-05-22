@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Boolean, Integer
 from sqlalchemy.dialects.sqlite import TEXT
-from database import Base
+from .database import Base
 import uuid
 import datetime
 def gen_id():
@@ -150,6 +150,35 @@ class Payment(Base):
     paid_at            = Column(DateTime, nullable=True)
     driver_fee         = Column(Float, nullable=True)
     shipper_refund     = Column(Float, nullable=True)
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id          = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    driver_id   = Column(TEXT, ForeignKey("users.id"), nullable=True)
+    sender_id   = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    sender_role = Column(String, nullable=False)   # "shipper" or "driver"
+    body        = Column(TEXT, nullable=False)
+    created_at  = Column(DateTime, default=datetime.datetime.utcnow)
+    read_at     = Column(DateTime, nullable=True)
+
+
+class DestinationChangeRequest(Base):
+    __tablename__ = "destination_change_requests"
+
+    id              = Column(TEXT, primary_key=True, default=gen_id)
+    shipment_id     = Column(TEXT, ForeignKey("shipments.id"), nullable=False)
+    dest_id         = Column(TEXT, ForeignKey("shipment_destinations.id"), nullable=False)
+    shipper_id      = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    driver_id       = Column(TEXT, ForeignKey("users.id"), nullable=False)
+    new_address     = Column(String, nullable=False)
+    new_lat         = Column(Float, nullable=True)
+    new_lng         = Column(Float, nullable=True)
+    status          = Column(String, default="pending")  # pending / accepted / rejected
+    created_at      = Column(DateTime, default=datetime.datetime.utcnow)
+    responded_at    = Column(DateTime, nullable=True)
 
 
 class CancellationRecord(Base):
